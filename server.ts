@@ -245,6 +245,14 @@ function saveState(state: CoffeeOpsState) {
   }
 }
 
+// Ensure compatibility with Vercel Serverless Function path stripping
+app.use((req, res, next) => {
+  if (!req.url.startsWith("/api") && req.url !== "/" && !req.url.startsWith("/assets")) {
+    req.url = "/api" + req.url;
+  }
+  next();
+});
+
 // Mount synchronization layer middleware prior to route evaluation
 app.use(async (req, res, next) => {
   if (req.path.startsWith("/api") && req.path !== "/api/health") {
