@@ -1,3 +1,6 @@
+import dotenv from "dotenv";
+dotenv.config();
+
 import express from "express";
 import path from "path";
 import fs from "fs";
@@ -8,6 +11,7 @@ import { GoogleGenAI } from "@google/genai";
 import midtransClient from "midtrans-client";
 import { initialStats } from "./src/data.js";
 import { CoffeeOpsState } from "./src/types.js";
+import { createClient } from "@supabase/supabase-js";
 
 let resolvedFilename = "";
 let resolvedDirname = "";
@@ -37,92 +41,221 @@ const DB_FILE = path.join(process.cwd(), "database.json");
 
 app.use(express.json({ limit: "20mb" }));
 
-// Helper to load/save database state
-function loadState(): CoffeeOpsState {
+// Initialize Supabase Client if credentials exist
+const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "";
+const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
+let supabase: ReturnType<typeof createClient> | null = null;
+
+if (supabaseUrl && supabaseAnonKey) {
+  try {
+    supabase = createClient(supabaseUrl, supabaseAnonKey);
+    console.log("[Supabase] Production client initialized successfully.");
+  } catch (err) {
+    console.error("[Supabase] Failed to initialize client:", err);
+  }
+}
+
+// In-Memory state cache
+let cachedState: CoffeeOpsState = initialStats;
+let lastSupabaseFetchTime = 0;
+const CACHE_TTL_MS = 3000; // 3 seconds Cache TTL to handle rapid multi-endpoint hits
+
+// Helper to perform automated mapping from users to employees
+function performEmployeeMapping(merged: CoffeeOpsState): boolean {
+  const existingUsers = merged.users || [];
+  const currentEmployees = merged.employees || [];
+  let hasNewMappings = false;
+
+  existingUsers.forEach(u => {
+    const alreadyExists = currentEmployees.some(emp => emp.userId === u.id || emp.employeeCode === u.staffCode);
+    if (!alreadyExists && u.role !== "Owner") {
+      currentEmployees.push({
+        id: "emp-" + u.id,
+        userId: u.id,
+        branchId: u.branchId || "Pusat Pangkalpinang (HQ)",
+        employeeCode: u.staffCode || "EMP-" + u.id.slice(0, 4).toUpperCase(),
+        fullName: u.name,
+        gender: "Pria",
+        phone: u.whatsappNumber || "08123456789",
+        email: u.email || "staff@coffeeops.com",
+        isActive: u.isActive ?? true,
+        createdAt: u.createdAt || "2026-06-01 08:00"
+      });
+      hasNewMappings = true;
+    }
+  });
+
+  if (hasNewMappings) {
+    merged.employees = currentEmployees;
+  }
+  return hasNewMappings;
+}
+
+// Merge loaded state with standard initialStats fields
+function mergeLoadedState(loaded: Partial<CoffeeOpsState>): CoffeeOpsState {
+  const merged: CoffeeOpsState = {
+    ...initialStats,
+    ...loaded,
+    users: loaded.users && loaded.users.length ? loaded.users : initialStats.users,
+    fohChecklists: loaded.fohChecklists || initialStats.fohChecklists,
+    fohFeedback: loaded.fohFeedback || initialStats.fohFeedback,
+    fohComplaints: loaded.fohComplaints || initialStats.fohComplaints,
+    fohTables: loaded.fohTables || initialStats.fohTables,
+    fohInventory: loaded.fohInventory || initialStats.fohInventory,
+    fohInventoryRequests: loaded.fohInventoryRequests || initialStats.fohInventoryRequests,
+    fohKpis: loaded.fohKpis || initialStats.fohKpis,
+    fohShifts: loaded.fohShifts || initialStats.fohShifts,
+    fohTraining: loaded.fohTraining || initialStats.fohTraining,
+    fohTrainingResults: loaded.fohTrainingResults || initialStats.fohTrainingResults,
+    sopsList: loaded.sopsList || initialStats.sopsList,
+    equipmentList: loaded.equipmentList || initialStats.equipmentList,
+    deviceSessions: loaded.deviceSessions || initialStats.deviceSessions,
+    bepData: loaded.bepData || initialStats.bepData,
+    roiData: loaded.roiData || initialStats.roiData,
+    backupsList: loaded.backupsList || [],
+    backupAuditLogs: loaded.backupAuditLogs || [],
+    disasterRecoveryActive: loaded.disasterRecoveryActive || false,
+    disasterRecoveryMockFailure: loaded.disasterRecoveryMockFailure || false,
+    backupNotificationSettings: loaded.backupNotificationSettings || undefined,
+    employees: loaded.employees || [],
+    employeeTasks: loaded.employeeTasks || [],
+    employeeKpis: loaded.employeeKpis || [],
+    customerFeedbacks: loaded.customerFeedbacks || [],
+    incidentReports: loaded.incidentReports || []
+  };
+
+  performEmployeeMapping(merged);
+  return merged;
+}
+
+// Fetch State dynamically from Supabase
+async function loadStateFromSupabase(): Promise<CoffeeOpsState | null> {
+  if (!supabase) return null;
+  try {
+    const { data, error } = await (supabase as any)
+      .from("coffeeops_state")
+      .select("state")
+      .eq("id", "default")
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (data && data.state) {
+      return mergeLoadedState(data.state as CoffeeOpsState);
+    } else {
+      // Row not found, create initial default row in Supabase
+      console.log("[Supabase] No global state found in cloud database. Initializing table...");
+      const localState = loadStateFromLocalFile();
+      const { error: insertError } = await (supabase as any)
+        .from("coffeeops_state")
+        .insert([{ id: "default", state: localState }]);
+      if (insertError) {
+        console.error("[Supabase] Failed to write initial state row:", insertError);
+      }
+      return localState;
+    }
+  } catch (err: any) {
+    console.error("[Supabase] Error loading metadata from Postgres:", err.message || err);
+  }
+  return null;
+}
+
+// Push state directly to Supabase table
+async function saveStateToSupabase(state: CoffeeOpsState) {
+  if (!supabase) return;
+  try {
+    const { error } = await (supabase as any)
+      .from("coffeeops_state")
+      .upsert({ id: "default", state, updated_at: new Date().toISOString() });
+    
+    if (error) {
+      console.error("[Supabase] Cloud sync push failed:", error);
+    } else {
+      console.log("[Supabase] Production state synced to cloud database.");
+    }
+  } catch (err) {
+    console.error("[Supabase] Sync network error:", err);
+  }
+}
+
+// Fallback: Read state from local file
+function loadStateFromLocalFile(): CoffeeOpsState {
   try {
     if (fs.existsSync(DB_FILE)) {
       const data = fs.readFileSync(DB_FILE, "utf-8");
       const loaded = JSON.parse(data) as CoffeeOpsState;
-      
-      const merged: CoffeeOpsState = {
-        ...initialStats,
-        ...loaded,
-        users: loaded.users && loaded.users.length ? loaded.users : initialStats.users,
-        fohChecklists: loaded.fohChecklists || initialStats.fohChecklists,
-        fohFeedback: loaded.fohFeedback || initialStats.fohFeedback,
-        fohComplaints: loaded.fohComplaints || initialStats.fohComplaints,
-        fohTables: loaded.fohTables || initialStats.fohTables,
-        fohInventory: loaded.fohInventory || initialStats.fohInventory,
-        fohInventoryRequests: loaded.fohInventoryRequests || initialStats.fohInventoryRequests,
-        fohKpis: loaded.fohKpis || initialStats.fohKpis,
-        fohShifts: loaded.fohShifts || initialStats.fohShifts,
-        fohTraining: loaded.fohTraining || initialStats.fohTraining,
-        fohTrainingResults: loaded.fohTrainingResults || initialStats.fohTrainingResults,
-        sopsList: loaded.sopsList || initialStats.sopsList,
-        equipmentList: loaded.equipmentList || initialStats.equipmentList,
-        deviceSessions: loaded.deviceSessions || initialStats.deviceSessions,
-        bepData: loaded.bepData || initialStats.bepData,
-        roiData: loaded.roiData || initialStats.roiData,
-        backupsList: loaded.backupsList || [],
-        backupAuditLogs: loaded.backupAuditLogs || [],
-        disasterRecoveryActive: loaded.disasterRecoveryActive || false,
-        disasterRecoveryMockFailure: loaded.disasterRecoveryMockFailure || false,
-        backupNotificationSettings: loaded.backupNotificationSettings || undefined,
-        employees: loaded.employees || [],
-        employeeTasks: loaded.employeeTasks || [],
-        employeeKpis: loaded.employeeKpis || [],
-        customerFeedbacks: loaded.customerFeedbacks || [],
-        incidentReports: loaded.incidentReports || []
-      };
-
-      // Perform Phase 3: Automatic mapping from users to employees
-      const existingUsers = merged.users || [];
-      const currentEmployees = merged.employees || [];
-      let hasNewMappings = false;
-
-      existingUsers.forEach(u => {
-        const alreadyExists = currentEmployees.some(emp => emp.userId === u.id || emp.employeeCode === u.staffCode);
-        if (!alreadyExists && u.role !== "Owner") {
-          currentEmployees.push({
-            id: "emp-" + u.id,
-            userId: u.id,
-            branchId: u.branchId || "Pusat Pangkalpinang (HQ)",
-            employeeCode: u.staffCode || "EMP-" + u.id.slice(0, 4).toUpperCase(),
-            fullName: u.name,
-            gender: "Pria",
-            phone: u.whatsappNumber || "08123456789",
-            email: u.email || "staff@coffeeops.com",
-            isActive: u.isActive ?? true,
-            createdAt: u.createdAt || "2026-06-01 08:00"
-          });
-          hasNewMappings = true;
-        }
-      });
-
-      if (hasNewMappings) {
-        merged.employees = currentEmployees;
-        try {
-          fs.writeFileSync(DB_FILE, JSON.stringify(merged, null, 2), "utf-8");
-        } catch (err) {
-          console.error("Error persisting mapped employees:", err);
-        }
-      }
-
-      return merged;
+      return mergeLoadedState(loaded);
     }
   } catch (err) {
-    console.error("Error loading database file, falling back to initialStats:", err);
+    console.error("Local database read failed, falling back to initialStats:", err);
   }
-  return initialStats;
+  return mergeLoadedState(initialStats);
 }
 
+// Middleware bridge to preload cache before route handler begins
+async function ensureStateLoaded(forceRefresh = false) {
+  const now = Date.now();
+  if (!supabase) {
+    // Local-only mode
+    if (forceRefresh || lastSupabaseFetchTime === 0) {
+      cachedState = loadStateFromLocalFile();
+      lastSupabaseFetchTime = now;
+    }
+    return;
+  }
+
+  // Cloud Mode: Check cache TTL
+  if (forceRefresh || now - lastSupabaseFetchTime > CACHE_TTL_MS) {
+    const cloudState = await loadStateFromSupabase();
+    if (cloudState) {
+      cachedState = cloudState;
+      // Mirror locally in database.json as cold local backup
+      try {
+        fs.writeFileSync(DB_FILE, JSON.stringify(cloudState, null, 2), "utf-8");
+      } catch (err) {
+        // Ephemeral file system warning
+      }
+    } else {
+      cachedState = loadStateFromLocalFile();
+    }
+    lastSupabaseFetchTime = now;
+  }
+}
+
+// Load state synchronously for existing route signatures
+function loadState(): CoffeeOpsState {
+  return cachedState;
+}
+
+// Save state synchronously with asynchronous web-hook/Supabase mirroring
 function saveState(state: CoffeeOpsState) {
+  cachedState = state;
   try {
     fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2), "utf-8");
   } catch (err) {
-    console.error("Error writing database file:", err);
+    // ephemeral FS compatibility
+  }
+
+  if (supabase) {
+    saveStateToSupabase(state).catch(err => {
+      console.error("[Supabase] Background cloud sync task failed:", err);
+    });
   }
 }
+
+// Mount synchronization layer middleware prior to route evaluation
+app.use(async (req, res, next) => {
+  if (req.path.startsWith("/api") && req.path !== "/api/health") {
+    try {
+      await ensureStateLoaded();
+    } catch (err) {
+      console.error("State prefetch error:", err);
+    }
+  }
+  next();
+});
 
 // REST APIs
 app.get("/api/state", (req, res) => {
@@ -1525,9 +1658,15 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[CoffeeOps Server] Online & connected running on http://0.0.0.0:${PORT}`);
-  });
+  if (process.env.VERCEL !== "1" && process.env.NOW_BUILDER !== "1" && !process.env.SERVERLESS) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`[CoffeeOps Server] Online & connected running on http://0.0.0.0:${PORT}`);
+    });
+  }
 }
 
-startServer();
+if (process.env.VERCEL !== "1" && process.env.NOW_BUILDER !== "1" && !process.env.SERVERLESS) {
+  startServer();
+}
+
+export default app;

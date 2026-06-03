@@ -1,6 +1,6 @@
 {
-  "name": "Remix: Remix: Remix: Remix: Remix: Remix: CoffeeOps Cafe Operations",
-  "description": "Sistem operasional harian terintegrasi multi-device untuk manajemen inventory, FIFO tracker, transfer stok gudang-bar, purchase request, dan waste logs.",
+  "name": "CoffeeOps Cafe Operations",
+  "description": "Sistem operasional harian terintegrasi multi-device untuk manajemen mementingkan FIFO tracker, transfer stok gudang-bar, purchase request, dan waste logs.",
   "requestFramePermissions": [
     "geolocation",
     "camera"

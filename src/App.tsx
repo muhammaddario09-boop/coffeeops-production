@@ -58,6 +58,15 @@ export default function App() {
   const [isAiOpen, setIsAiOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
+  // PWA & Connection Engine States
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
+  const [showUpdateAvailable, setShowUpdateAvailable] = useState(false);
+  const [registration, setRegistration] = useState<ServiceWorkerRegistration | null>(null);
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
+  const [showOfflineToast, setShowOfflineToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
   // User Authentication, Attendance, & RBAC State
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     const rememberMe = localStorage.getItem("coffeeops_rememberMe") === "true";
@@ -494,6 +503,100 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
+  // PWA Registration & Event Bindings
+  useEffect(() => {
+    const isBannerDismissed = localStorage.getItem("coffeeops_install_dismissed") === "true";
+
+    const handleBeforeInstall = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      if (!isBannerDismissed) {
+        setShowInstallBanner(true);
+      }
+    };
+
+    const handleOnline = () => {
+      setIsOffline(false);
+      setIsConnected(true);
+      setShowOfflineToast(true);
+      setTimeout(() => setShowOfflineToast(false), 5000);
+      fetchStateFromServer(false);
+    };
+
+    const handleOffline = () => {
+      setIsOffline(true);
+      setIsConnected(false);
+      setShowOfflineToast(true);
+      setTimeout(() => setShowOfflineToast(false), 5000);
+    };
+
+    window.addEventListener("beforeinstallprompt", handleBeforeInstall);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    // Register PWA Service Worker
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").then((reg) => {
+        setRegistration(reg);
+
+        reg.addEventListener("updatefound", () => {
+          const newWorker = reg.installing;
+          if (newWorker) {
+            newWorker.addEventListener("statechange", () => {
+              if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
+                setShowUpdateAvailable(true);
+              }
+            });
+          }
+        });
+
+        if (reg.waiting) {
+          setShowUpdateAvailable(true);
+        }
+      }).catch((e) => {
+        console.warn("Service Worker registration failed/unsupported:", e);
+      });
+    }
+
+    let refreshing = false;
+    navigator.serviceWorker?.addEventListener("controllerchange", () => {
+      if (!refreshing) {
+        refreshing = true;
+        window.location.reload();
+      }
+    });
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstall);
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === "accepted") {
+      console.log("User accepted the install prompt");
+      setShowInstallBanner(false);
+    }
+    setDeferredPrompt(null);
+  };
+
+  const handleDismissInstall = () => {
+    localStorage.setItem("coffeeops_install_dismissed", "true");
+    setShowInstallBanner(false);
+  };
+
+  const handleApplyUpdate = () => {
+    if (registration && registration.waiting) {
+      registration.waiting.postMessage({ type: "SKIP_WAITING" });
+    } else {
+      window.location.reload();
+    }
+  };
+
   // Inactivity limit mapper based on user roles (Staff: 15m, Supervisor: 30m, Manager: 60m)
   const getInactivityLimit = (role: string): number | null => {
     if (role === "Owner") return null; // Disabled for Owner
@@ -548,7 +651,10 @@ export default function App() {
   }, [state.deviceSessions, currentUser]);
 
   const triggerToast = (message: string) => {
-    alert(message); // Standard simple alert for confirmation fallback
+    setToastMessage(message);
+    const timeout = setTimeout(() => {
+      setToastMessage((prev) => prev === message ? null : prev);
+    }, 4000);
   };
 
   const addActivity = (icon: string, text: string, type: "in" | "out" | "waste" | "pr" | "transfer" | "info") => {
@@ -2807,6 +2913,91 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* ── HIGH FIDELITY PWA OVERLAYS & TOASTS ── */}
+
+      {/* 1. System Auto Update Toast */}
+      {showUpdateAvailable && (
+        <div className="fixed bottom-6 left-6 z-50 max-w-sm bg-[#150a04] border border-amber-500/30 p-4 rounded-xl shadow-2xl text-amber-50 animate-bounce flex flex-col gap-2.5">
+          <div className="flex items-start gap-2.5">
+            <span className="text-xl">🚀</span>
+            <div>
+              <h5 className="font-serif font-bold text-xs text-amber-100">Pembaruan Sistem Tersedia!</h5>
+              <p className="text-[10px] text-amber-200/60 leading-relaxed font-sans mt-0.5">Versi baru CoffeeOps telah dirilis secara live. Silakan perbarui untuk mendapatkan performa terbaik.</p>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 text-[10px]">
+            <button
+              onClick={() => setShowUpdateAvailable(false)}
+              className="px-3 py-1.5 rounded-lg border border-amber-500/10 hover:bg-[#FAF0E6]/5 text-amber-100 font-medium cursor-pointer"
+            >
+              Nanti Saja
+            </button>
+            <button
+              onClick={handleApplyUpdate}
+              className="px-3.5 py-1.5 rounded-lg bg-amber-500 text-amber-950 font-bold hover:bg-amber-600 transition active:scale-95 cursor-pointer"
+            >
+              Segarkan Sekarang
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 2. PWA Add to Home Screen (iPad & Android promotion card) */}
+      {showInstallBanner && deferredPrompt && (
+        <div className="fixed bottom-24 right-6 z-50 max-w-sm bg-[#0a180f]/95 backdrop-blur-md border border-[#D4A853]/30 p-5 rounded-2xl shadow-3xl text-amber-50 animate-fade-in flex flex-col gap-3">
+          <div className="flex items-start gap-3">
+            <div className="bg-[#FAF0E6]/5 p-2 rounded-xl border border-amber-500/15">
+              <img
+                src="https://img.icons8.com/isometric/48/coffee-to-go.png"
+                alt="CoffeeOps Icon"
+                className="w-10 h-10 object-contain animate-pulse"
+              />
+            </div>
+            <div>
+              <h5 className="font-serif font-bold text-xs text-amber-100">Unduh CoffeeOps di Perangkat</h5>
+              <p className="text-[10px] text-amber-200/60 leading-relaxed font-sans mt-0.5">
+                Aktifkan fitur kasir offline, sinkronisasi waktu nyata, dan login cepat tanpa membuka browser berulang kali.
+              </p>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 text-[10px]">
+            <button
+              onClick={handleDismissInstall}
+              className="px-3 py-1.5 rounded-lg border border-amber-500/10 hover:bg-[#FAF0E6]/5 text-amber-200/70 hover:text-amber-100 font-semibold cursor-pointer"
+            >
+              Abaikan
+            </button>
+            <button
+              onClick={handleInstallClick}
+              className="px-4 py-1.5 rounded-lg bg-[#D4A853] text-amber-950 font-bold hover:bg-[#c39744] transition active:scale-95 cursor-pointer"
+            >
+              Tambahkan Ke Beranda
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Realtime Connection Offline Monitor Banner */}
+      {showOfflineToast && (
+        <div className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-5 py-2.5 rounded-full border shadow-lg text-[10px] font-bold flex items-center gap-2.5 animate-bounce transition-all ${
+          isOffline 
+            ? "bg-red-950/95 border-red-500/40 text-red-200" 
+            : "bg-emerald-950/95 border-emerald-500/40 text-emerald-200"
+        }`}>
+          <span className={`w-2 h-2 rounded-full animate-pulse ${isOffline ? 'bg-red-500' : 'bg-emerald-500'}`} />
+          <span>{isOffline ? "MODE OFFLINE AKTIF — Transaksi harian di-cache aman." : "KONEKSI KEMBALI ONLINE — Sinkronisasi Supabase sukses."}</span>
+        </div>
+      )}
+
+      {/* 4. Custom Enterprise Glassmorphic Toast layer overlay */}
+      {toastMessage && (
+        <div className="fixed top-24 right-6 z-[100] max-w-xs bg-black/90 backdrop-blur-md border border-[#D4A853]/40 p-4 rounded-xl shadow-2xl text-amber-50 flex items-center gap-2.5 animate-pulse">
+          <span className="text-base text-amber-400">🛎️</span>
+          <p className="text-xs font-medium text-amber-100 leading-normal">{toastMessage}</p>
+        </div>
+      )}
+
       </div>
     </ErrorBoundary>
   );
