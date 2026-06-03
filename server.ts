@@ -110,6 +110,7 @@ function mergeLoadedState(loaded: Partial<CoffeeOpsState>): CoffeeOpsState {
     sopsList: loaded.sopsList || initialStats.sopsList,
     equipmentList: loaded.equipmentList || initialStats.equipmentList,
     deviceSessions: loaded.deviceSessions || initialStats.deviceSessions,
+    revokedSessionIds: loaded.revokedSessionIds || [],
     bepData: loaded.bepData || initialStats.bepData,
     roiData: loaded.roiData || initialStats.roiData,
     backupsList: loaded.backupsList || [],

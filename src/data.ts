@@ -30,7 +30,9 @@ export const initialStats: CoffeeOpsState = {
     shiftSiangEnd: "21:00",
     shiftMalamStart: "20:00",
     shiftMalamEnd: "23:00",
-    lateThresholdMinutes: 15
+    lateThresholdMinutes: 15,
+    cafeLat: -2.1283,
+    cafeLng: 106.1161
   },
   master: defaultMasterItems,
   inventory: {

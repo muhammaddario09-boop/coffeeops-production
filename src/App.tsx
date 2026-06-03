@@ -643,15 +643,12 @@ export default function App() {
     const currentSessionId = localStorage.getItem("coffeeops_sessionId");
     if (!currentSessionId) return;
 
-    const list = state.deviceSessions || [];
-    if (list.length > 0) {
-      const isSessionStillValid = list.some(s => s.id === currentSessionId);
-      if (!isSessionStillValid) {
-        handleLogout();
-        alert("🛡️ Keamanan CoffeeOps: Perangkat/sesi Anda telah dikeluarkan secara remote oleh Owner atau Manager.");
-      }
+    const revokedList = state.revokedSessionIds || [];
+    if (revokedList.includes(currentSessionId)) {
+      handleLogout();
+      alert("🛡️ Keamanan CoffeeOps: Perangkat/sesi Anda telah dikeluarkan secara remote oleh Owner atau Manager.");
     }
-  }, [state.deviceSessions, currentUser, hasFetchedState]);
+  }, [state.revokedSessionIds, currentUser, hasFetchedState]);
 
   const triggerToast = (message: string) => {
     setToastMessage(message);
@@ -1799,6 +1796,7 @@ export default function App() {
               onClockIn={handleClockIn}
               onClockOut={handleClockOut}
               onDeleteAttendanceCode={handleDeleteAttendance}
+              onUpdateState={(nextState) => syncStateWithServer(nextState)}
             />
           )}
           {activeTab === "shift_mgmt" && (

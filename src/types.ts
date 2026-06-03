@@ -12,6 +12,8 @@ export interface BrandBranding {
   shiftMalamStart?: string;
   shiftMalamEnd?: string;
   lateThresholdMinutes?: number;
+  cafeLat?: number;
+  cafeLng?: number;
 }
 
 export interface MasterItem {
@@ -362,6 +364,7 @@ export interface CoffeeOpsState {
   sopsList?: SopItem[];
   equipmentList?: EquipmentAsset[];
   deviceSessions?: DeviceSession[];
+  revokedSessionIds?: string[];
   bepData?: BepAnalytics;
   roiData?: RoiAnalytics;
   backupsList?: BackupItem[];

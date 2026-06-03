@@ -7,6 +7,7 @@ interface AbsensiProps {
   onClockIn: (userId: string, shift: string, facePhoto?: string) => void;
   onClockOut: (id: string) => void;
   onDeleteAttendanceCode: (id: string) => void;
+  onUpdateState?: (nextState: CoffeeOpsState) => void;
 }
 
 export default function AbsensiStaff({
@@ -15,6 +16,7 @@ export default function AbsensiStaff({
   onClockIn,
   onClockOut,
   onDeleteAttendanceCode,
+  onUpdateState,
 }: AbsensiProps) {
   const attendance = state.attendance || [];
   const users = state.users || [];
@@ -28,15 +30,36 @@ export default function AbsensiStaff({
   const [selectedShift, setSelectedShift] = useState(shiftPagiStr);
 
   // === GEOLOCATION & GEOFENCING OPERASIONAL ===
-  // Coordinates are stored in localStorage to persist on the current browser/device
+  // Coordinates are stored in state/localStorage to persist on all devices synchronously
   const [cafeCoords, setCafeCoords] = useState(() => {
-    const savedLat = localStorage.getItem("coffeeops_cafeLat");
-    const savedLng = localStorage.getItem("coffeeops_cafeLng");
+    const savedLat = state.branding.cafeLat ?? localStorage.getItem("coffeeops_cafeLat");
+    const savedLng = state.branding.cafeLng ?? localStorage.getItem("coffeeops_cafeLng");
+    
+    let latNum = -2.1283; // default Pangkalpinang HQ
+    let lngNum = 106.1161; // default Pangkalpinang HQ
+
+    if (savedLat !== null && savedLat !== undefined) {
+      latNum = typeof savedLat === "string" ? parseFloat(savedLat) : savedLat;
+    }
+    if (savedLng !== null && savedLng !== undefined) {
+      lngNum = typeof savedLng === "string" ? parseFloat(savedLng) : savedLng;
+    }
+
     return {
-      lat: savedLat ? parseFloat(savedLat) : -6.2088,
-      lng: savedLng ? parseFloat(savedLng) : 106.8456,
+      lat: isNaN(latNum) ? -2.1283 : latNum,
+      lng: isNaN(lngNum) ? 106.1161 : lngNum,
     };
   });
+
+  // Sync state.branding.cafeLat / cafeLng inside component state whenever it receives updates from backend/polling
+  useEffect(() => {
+    if (state.branding.cafeLat !== undefined && state.branding.cafeLng !== undefined) {
+      setCafeCoords({
+        lat: state.branding.cafeLat,
+        lng: state.branding.cafeLng
+      });
+    }
+  }, [state.branding.cafeLat, state.branding.cafeLng]);
 
   const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [checkingGps, setCheckingGps] = useState(false);
@@ -350,6 +373,16 @@ export default function AbsensiStaff({
         setCurrentDistance(dist);
         setGpsVerified(dist <= 100);
       }
+      if (onUpdateState) {
+        onUpdateState({
+          ...state,
+          branding: {
+            ...state.branding,
+            cafeLat: latNum,
+            cafeLng: lngNum,
+          },
+        });
+      }
     }
   };
 
@@ -370,7 +403,17 @@ export default function AbsensiStaff({
         localStorage.setItem("coffeeops_cafeLat", lat.toString());
         localStorage.setItem("coffeeops_cafeLng", lng.toString());
         setCheckingGps(false);
-        alert(`🎯 LOKASI CAFE BERHASIL DISINKRONKAN!\nTitik koordinat operasional baru dikunci pada:\nLat: ${lat}\nLng: ${lng}\nSemua kru yang berjarak >100m wajib meminta otorisasi.`);
+        if (onUpdateState) {
+          onUpdateState({
+            ...state,
+            branding: {
+              ...state.branding,
+              cafeLat: lat,
+              cafeLng: lng,
+            },
+          });
+        }
+        alert(`🎯 LOKASI CAFE BERHASIL DISINKRONKAN!\nTitik koordinat operasional baru dikunci dan disinkronisasi ke server:\nLat: ${lat}\nLng: ${lng}\nSemua kru sekarang tersinkronisasi otomatis.`);
       },
       (error) => {
         setCheckingGps(false);

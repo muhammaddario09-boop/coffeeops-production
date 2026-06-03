@@ -644,9 +644,13 @@ export default function UserManagement({
                   if (!syncState) return;
                   const currentSessionId = localStorage.getItem("coffeeops_sessionId");
                   const nextSessions = (state.deviceSessions || []).filter(s => s.id === currentSessionId);
+                  const revokedIds = (state.deviceSessions || [])
+                    .filter(s => s.id !== currentSessionId)
+                    .map(s => s.id);
                   syncState({
                     ...state,
-                    deviceSessions: nextSessions
+                    deviceSessions: nextSessions,
+                    revokedSessionIds: [...(state.revokedSessionIds || []), ...revokedIds]
                   });
                   alert("Semua sesi perangkat operasional lainnya berhasil diputuskan.");
                 }}
@@ -719,7 +723,8 @@ export default function UserManagement({
                           const nextSessions = (state.deviceSessions || []).filter(s => s.id !== session.id);
                           syncState({
                             ...state,
-                            deviceSessions: nextSessions
+                            deviceSessions: nextSessions,
+                            revokedSessionIds: [...(state.revokedSessionIds || []), session.id]
                           });
                           alert("Sesi perangkat tersebut berhasil diputuskan secara paksa.");
                         }}
