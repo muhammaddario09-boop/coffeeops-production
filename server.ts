@@ -255,7 +255,7 @@ app.use((req, res, next) => {
 
 // Mount synchronization layer middleware prior to route evaluation
 app.use(async (req, res, next) => {
-  if (req.path.startsWith("/api") && req.path !== "/api/health") {
+  if ((req.path.startsWith("/api") || req.path.includes("download-stored-report")) && req.path !== "/api/health") {
     try {
       await ensureStateLoaded();
     } catch (err) {
@@ -280,7 +280,7 @@ app.post("/api/state", (req, res) => {
   res.json({ status: "success", message: "Database updated successfully across all online devices" });
 });
 
-app.get("/api/download-stored-report/:period", (req, res) => {
+app.get(["/api/download-stored-report/:period", "/download-stored-report/:period"], (req, res) => {
   const { period } = req.params;
   const state = loadState();
 

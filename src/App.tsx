@@ -66,6 +66,7 @@ export default function App() {
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
   const [showOfflineToast, setShowOfflineToast] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [hasFetchedState, setHasFetchedState] = useState(false);
 
   // User Authentication, Attendance, & RBAC State
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
@@ -471,6 +472,8 @@ export default function App() {
       }
     } catch (err) {
       if (!silent) setIsConnected(false);
+    } finally {
+      setHasFetchedState(true);
     }
   };
 
@@ -636,7 +639,7 @@ export default function App() {
 
   // security: Validate if current device session ID has been revoked/forced out remotely by Admin
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser || !hasFetchedState) return;
     const currentSessionId = localStorage.getItem("coffeeops_sessionId");
     if (!currentSessionId) return;
 
@@ -648,7 +651,7 @@ export default function App() {
         alert("🛡️ Keamanan CoffeeOps: Perangkat/sesi Anda telah dikeluarkan secara remote oleh Owner atau Manager.");
       }
     }
-  }, [state.deviceSessions, currentUser]);
+  }, [state.deviceSessions, currentUser, hasFetchedState]);
 
   const triggerToast = (message: string) => {
     setToastMessage(message);
