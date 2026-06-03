@@ -1433,6 +1433,9 @@ export default function App() {
   };
 
   const isTabRestricted = (tabId: string, role: string) => {
+    if (tabId === "midtrans_setup" || tabId === "qris_tester") {
+      return role !== "Owner";
+    }
     if (role === "Owner" || role === "Manager") return false;
 
     if (role === "Waiter" || role === "Head Waiter") {

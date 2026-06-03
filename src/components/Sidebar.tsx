@@ -28,6 +28,9 @@ export default function Sidebar({
   const pendingPrCount = state.prs.filter((p) => p.status.includes("Approval") || p.status.includes("Menunggu")).length;
 
   const isTabRestricted = (tabId: string, role: string) => {
+    if (tabId === "midtrans_setup" || tabId === "qris_tester") {
+      return role !== "Owner";
+    }
     if (tabId === "system_mgmt") {
       return !["Owner", "Manager"].includes(role);
     }

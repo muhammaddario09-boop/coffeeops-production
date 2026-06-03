@@ -122,7 +122,7 @@ export interface PrDoc {
   supplier: string;
   items: PrItemRow[];
   total: number;
-  status: "Menunggu Approval" | "Disetujui" | "Ditolak" | "Selesai Order";
+  status: "Menunggu Approval" | "Menunggu Approval Head Barista" | "Menunggu Approval Manager" | "Menunggu Approval Owner" | "Disetujui" | "Ditolak" | "Selesai Order";
 }
 
 export interface TransferLog {

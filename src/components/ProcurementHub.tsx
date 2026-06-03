@@ -169,7 +169,10 @@ export default function ProcurementHub({ state, currentUser, syncState, triggerT
 
   // PR status transition
   // Barista -> Head Barista -> Manager -> Owner -> PO generated -> supplier
-  const handleUpgradePRStatus = (pr: PrDoc, action: "HeadBaristaApprove" | "ManagerApprove" | "OwnerApprove" | "Reject") => {
+  const handleUpgradePRStatus = (
+    pr: PrDoc,
+    action: "HeadBaristaApprove" | "ManagerApprove" | "ManagerDirectApprove" | "OwnerApprove" | "OwnerApproveDigital" | "Reject"
+  ) => {
     const nextState = { ...state };
     const prIdx = nextState.prs.findIndex(p => p.no === pr.no);
     if (prIdx === -1) return;
@@ -177,6 +180,7 @@ export default function ProcurementHub({ state, currentUser, syncState, triggerT
     const currentDoc = nextState.prs[prIdx];
     let nextStatus: any = currentDoc.status;
     let logMsg = "";
+    let shouldGeneratePO = false;
 
     if (action === "Reject") {
       nextStatus = "Ditolak";
@@ -188,36 +192,49 @@ export default function ProcurementHub({ state, currentUser, syncState, triggerT
       } else if (role === "Head Barista" && action === "HeadBaristaApprove") {
         nextStatus = "Menunggu Approval Manager";
         logMsg = `PR ${pr.no} direkomendasikan Head Barista ${currentUser?.name} ke Manager`;
-      } else if (role === "Manager" && action === "ManagerApprove") {
-        nextStatus = "Menunggu Approval Owner";
-        logMsg = `PR ${pr.no} diaudit & diloloskan Manager ${currentUser?.name} meminta otorisasi Owner`;
-      } else if (role === "Owner" && action === "OwnerApprove") {
+      } else if (role === "Manager") {
+        if (action === "ManagerDirectApprove") {
+          nextStatus = "Disetujui";
+          logMsg = `PR ${pr.no} DISETUJUI LANGSUNG oleh Manager ${currentUser?.name} menggunakan Dana Darurat`;
+          shouldGeneratePO = true;
+        } else {
+          nextStatus = "Menunggu Approval Owner";
+          logMsg = `PR ${pr.no} diaudit & diloloskan Manager ${currentUser?.name} meminta otorisasi Owner`;
+        }
+      } else if (role === "Owner") {
         nextStatus = "Disetujui";
-        logMsg = `PR ${pr.no} disetujui penuh oleh Owner ${currentUser?.name}. Pembelian disahkan!`;
-
-        // Automatically Generate Purchase Order (PO Engine)
-        const poNumber = "PO-" + new Date().getFullYear() + "-" + Math.floor(100000 + Math.random() * 90000);
-        const supplierDoc = nextState.suppliers?.find(s => s.name === currentDoc.supplier) || { id: "unknown" };
-        
-        const newPo: PoDoc = {
-          id: "PO-" + Date.now(),
-          poNumber,
-          date: new Date().toISOString().split("T")[0],
-          supplierId: supplierDoc.id,
-          supplierName: currentDoc.supplier,
-          items: currentDoc.items.map(it => ({
-            code: it.code,
-            name: it.name,
-            qty: it.qty,
-            unit: it.unit,
-            price: it.price,
-            subtotal: it.subtotal
-          })),
-          total: currentDoc.total,
-          status: "Draft"
-        };
-        nextState.pos = [...(nextState.pos || []), newPo];
+        shouldGeneratePO = true;
+        if (action === "OwnerApproveDigital") {
+          logMsg = `PR ${pr.no} disetujui penuh dengan Tanda Tangan Digital Resmi Owner ${currentUser?.name}`;
+        } else {
+          logMsg = `PR ${pr.no} disetujui penuh oleh Owner ${currentUser?.name}. Pembelian disahkan!`;
+        }
       }
+    }
+
+    if (shouldGeneratePO) {
+      // Automatically Generate Purchase Order (PO Engine)
+      const poNumber = "PO-" + new Date().getFullYear() + "-" + Math.floor(100000 + Math.random() * 90000);
+      const supplierDoc = nextState.suppliers?.find(s => s.name === currentDoc.supplier) || { id: "unknown" };
+      
+      const newPo: PoDoc = {
+        id: "PO-" + Date.now(),
+        poNumber,
+        date: new Date().toISOString().split("T")[0],
+        supplierId: supplierDoc.id,
+        supplierName: currentDoc.supplier,
+        items: currentDoc.items.map(it => ({
+          code: it.code,
+          name: it.name,
+          qty: it.qty,
+          unit: it.unit,
+          price: it.price,
+          subtotal: it.subtotal
+        })),
+        total: currentDoc.total,
+        status: "Draft"
+      };
+      nextState.pos = [...(nextState.pos || []), newPo];
     }
 
     nextState.prs[prIdx] = {
@@ -788,39 +805,74 @@ Halo! Saya dapat menganalisa data logistik Anda dan menjawab pertanyaan spesifik
                           Detail
                         </button>
 
-                        {/* Workflow Approval based on role */}
-                        {pr.status === "Menunggu Approval" && canApprovePR && (
-                          <div className="flex gap-1">
-                            {role === "Head Barista" && (
-                              <button
-                                onClick={() => handleUpgradePRStatus(pr, "HeadBaristaApprove")}
-                                className="bg-emerald-600 text-white font-bold leading-none text-[9px] px-2 py-1 rounded hover:bg-emerald-500 cursor-pointer"
-                              >
-                                Rekomendasikan
-                              </button>
-                            )}
-                            {role === "Manager" && (
-                              <button
-                                onClick={() => handleUpgradePRStatus(pr, "ManagerApprove")}
-                                className="bg-emerald-600 text-white font-bold leading-none text-[9px] px-2 py-1 rounded hover:bg-emerald-500 cursor-pointer"
-                              >
-                                Audit Lolos
-                              </button>
-                            )}
-                            {role === "Owner" && (
-                              <button
-                                onClick={() => handleUpgradePRStatus(pr, "OwnerApprove")}
-                                className="bg-emerald-600 text-white font-bold leading-none text-[9px] px-2 py-1 rounded hover:bg-emerald-500 cursor-pointer"
-                              >
-                                Sahkan PO
-                              </button>
-                            )}
-                            <button
-                              onClick={() => handleUpgradePRStatus(pr, "Reject")}
-                              className="bg-red-950 text-red-400 font-bold border border-red-500/20 leading-none text-[9px] px-2 py-1 rounded hover:bg-red-900 cursor-pointer"
-                            >
-                              Tolak
-                            </button>
+                        {/* Workflow Approval based on role with multi-option choices */}
+                        {pr.status !== "Disetujui" && pr.status !== "Ditolak" && canApprovePR && (
+                          <div className="flex flex-col gap-1 items-end">
+                            <span className="text-[8px] font-mono opacity-50 block uppercase tracking-wider font-semibold">Tindakan Otoritas :</span>
+                            <div className="flex flex-wrap gap-1 justify-end max-w-[240px]">
+                              {/* Head Barista Options */}
+                              {role === "Head Barista" && (pr.status === "Menunggu Approval" || pr.status === "Menunggu Approval Head Barista") && (
+                                <button
+                                  onClick={() => handleUpgradePRStatus(pr, "HeadBaristaApprove")}
+                                  className="bg-emerald-600 text-white font-bold leading-none text-[9px] px-2 py-1.5 rounded hover:bg-emerald-500 cursor-pointer shrink-0"
+                                  title="Rekomendasikan PR ini ke Manager"
+                                >
+                                  ✓ Rekomendasikan
+                                </button>
+                              )}
+
+                              {/* Manager Choice Options */}
+                              {role === "Manager" && (pr.status === "Menunggu Approval" || pr.status === "Menunggu Approval Head Barista" || pr.status === "Menunggu Approval Manager") && (
+                                <>
+                                  <button
+                                    onClick={() => handleUpgradePRStatus(pr, "ManagerApprove")}
+                                    className="bg-emerald-600 text-white font-bold leading-none text-[9px] px-2 py-1.5 rounded hover:bg-emerald-500 cursor-pointer shrink-0"
+                                    title="Tandai audit lolos dan teruskan ke Owner"
+                                  >
+                                    ✓ Loloskan ke Owner
+                                  </button>
+                                  <button
+                                    onClick={() => handleUpgradePRStatus(pr, "ManagerDirectApprove")}
+                                    className="bg-amber-600 text-white font-bold leading-none text-[9px] px-2 py-1.5 rounded hover:bg-amber-500 cursor-pointer shrink-0"
+                                    title="Sahkan & setujui langsung menggunakan dana taktis darurat"
+                                  >
+                                    ⚡ Sahkan Langsung
+                                  </button>
+                                </>
+                              )}
+
+                              {/* Owner Choice Options */}
+                              {role === "Owner" && (
+                                <>
+                                  <button
+                                    onClick={() => handleUpgradePRStatus(pr, "OwnerApprove")}
+                                    className="bg-emerald-600 text-white font-bold leading-none text-[9px] px-2 py-1.5 rounded hover:bg-emerald-500 cursor-pointer shrink-0"
+                                    title="Sahkan Purchase Order Resmi"
+                                  >
+                                    ✓ Sahkan PO
+                                  </button>
+                                  <button
+                                    onClick={() => handleUpgradePRStatus(pr, "OwnerApproveDigital")}
+                                    className="bg-[#D4A853] text-amber-950 font-sans font-bold leading-none text-[9px] px-2 py-1.5 rounded hover:bg-amber-400 cursor-pointer shrink-0"
+                                    title="Setujui penuh dengan tandatangan digital"
+                                  >
+                                    ✍️ TTD Digital & Sahkan
+                                  </button>
+                                </>
+                              )}
+
+                              {/* Reject Option */}
+                              {((role === "Head Barista" && (pr.status === "Menunggu Approval" || pr.status === "Menunggu Approval Head Barista")) ||
+                                (role === "Manager" && (pr.status === "Menunggu Approval" || pr.status === "Menunggu Approval Head Barista" || pr.status === "Menunggu Approval Manager")) ||
+                                (role === "Owner")) && (
+                                <button
+                                  onClick={() => handleUpgradePRStatus(pr, "Reject")}
+                                  className="bg-red-950 text-red-400 font-bold border border-red-500/20 leading-none text-[9px] px-2 py-1.5 rounded hover:bg-red-900 cursor-pointer shrink-0"
+                                >
+                                  Tolak
+                                </button>
+                              )}
+                            </div>
                           </div>
                         )}
                       </div>
@@ -1173,30 +1225,56 @@ Halo! Saya dapat menganalisa data logistik Anda dan menjawab pertanyaan spesifik
               </button>
 
               {/* Perform approval inline inside details modal! */}
-              {selectedPr.status === "Menunggu Approval" && canApprovePR && (
-                <div className="flex gap-2">
-                  {role === "Head Barista" && (
+              {selectedPr.status !== "Disetujui" && selectedPr.status !== "Ditolak" && canApprovePR && (
+                <div className="flex flex-wrap gap-2">
+                  {role === "Head Barista" && (selectedPr.status === "Menunggu Approval" || selectedPr.status === "Menunggu Approval Head Barista") && (
                     <button
                       onClick={() => handleUpgradePRStatus(selectedPr, "HeadBaristaApprove")}
                       className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs py-2 px-4 rounded-xl cursor-pointer"
                     >
-                      ✓ Rekomendasikan
+                      ✓ Rekomendasikan ke Manager
                     </button>
                   )}
-                  {role === "Manager" && (
-                    <button
-                      onClick={() => handleUpgradePRStatus(selectedPr, "ManagerApprove")}
-                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs py-2 px-4 rounded-xl cursor-pointer"
-                    >
-                      ✓ Loloskan Audit
-                    </button>
+                  {role === "Manager" && (selectedPr.status === "Menunggu Approval" || selectedPr.status === "Menunggu Approval Head Barista" || selectedPr.status === "Menunggu Approval Manager") && (
+                    <>
+                      <button
+                        onClick={() => handleUpgradePRStatus(selectedPr, "ManagerApprove")}
+                        className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs py-2 px-4 rounded-xl cursor-pointer"
+                      >
+                        ✓ Loloskan ke Owner
+                      </button>
+                      <button
+                        onClick={() => handleUpgradePRStatus(selectedPr, "ManagerDirectApprove")}
+                        className="bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs py-2 px-4 rounded-xl cursor-pointer"
+                      >
+                        ⚡ Sahkan Langsung (Dana Darurat)
+                      </button>
+                    </>
                   )}
                   {role === "Owner" && (
+                    <>
+                      <button
+                        onClick={() => handleUpgradePRStatus(selectedPr, "OwnerApprove")}
+                        className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs py-2 px-5 rounded-xl cursor-pointer"
+                      >
+                        ✓ Sahkan PO Resmi
+                      </button>
+                      <button
+                        onClick={() => handleUpgradePRStatus(selectedPr, "OwnerApproveDigital")}
+                        className="bg-[#D4A853] hover:bg-amber-400 text-amber-950 font-bold text-xs py-2 px-5 rounded-xl cursor-pointer font-sans"
+                      >
+                        ✍️ TTD Digital & Sahkan Full
+                      </button>
+                    </>
+                  )}
+                  {((role === "Head Barista" && (selectedPr.status === "Menunggu Approval" || selectedPr.status === "Menunggu Approval Head Barista")) ||
+                    (role === "Manager" && (selectedPr.status === "Menunggu Approval" || selectedPr.status === "Menunggu Approval Head Barista" || selectedPr.status === "Menunggu Approval Manager")) ||
+                    (role === "Owner")) && (
                     <button
-                      onClick={() => handleUpgradePRStatus(selectedPr, "OwnerApprove")}
-                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs py-2 px-5 rounded-xl cursor-pointer"
+                      onClick={() => handleUpgradePRStatus(selectedPr, "Reject")}
+                      className="bg-red-950 hover:bg-red-900 border border-red-500/20 text-red-400 font-bold text-xs py-2 px-4 rounded-xl cursor-pointer"
                     >
-                      ✓ Sahkan PO Resmi
+                      Tolak
                     </button>
                   )}
                 </div>
