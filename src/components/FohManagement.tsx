@@ -1862,13 +1862,111 @@ export default function FohManagement({
                 exit={{ opacity: 0, y: -5 }}
                 className="space-y-6"
               >
-                <div>
-                  <h3 className="text-lg font-serif font-bold text-amber-100">
-                    Sistem Status Meja (Table Management)
-                  </h3>
-                  <p className="text-xs text-amber-100/40 font-mono">
-                    Sentuh salah satu kartu meja di bawah ini untuk mengubah atau merotasi status secara real-time.
-                  </p>
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 font-sans">
+                  <div>
+                    <h3 className="text-xl font-serif font-bold text-amber-100 flex items-center gap-2">
+                      🍽️ Sistem Status Meja (Table Management)
+                    </h3>
+                    <p className="text-xs text-amber-100/40 font-mono">
+                      Sentuh salah satu kartu meja di bawah ini untuk mengubah atau merotasi status secara real-time.
+                    </p>
+                  </div>
+                  {/* Dedicated Quick Action buttons for adding and resetting tables */}
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newId = `tbl-${Date.now()}`;
+                        const newName = `Meja ${tables.length + 1}`;
+                        const updated = [...tables, { id: newId, name: newName, status: "Available" as const }];
+                        syncState({
+                          ...state,
+                          fohTables: updated
+                        });
+                        triggerToast(`✓ Berhasil menambahkan ${newName}. Total sekarang: ${updated.length} meja!`);
+                      }}
+                      className="bg-[#D4A853] hover:bg-amber-600 active:scale-95 text-amber-950 font-bold px-3.5 py-2 rounded-xl text-xs flex items-center gap-1.5 cursor-pointer transition shadow-md font-sans"
+                    >
+                      <Plus className="w-4 h-4" /> Tambah Meja ({tables.length + 1})
+                    </button>
+                    {tables.length > 6 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (confirm("Reset layout meja ke standar cafe (6 meja)? Seluruh data meja kustom Anda akan dihapus secara permanen.")) {
+                            const defaults = [
+                              { id: "tbl-1", name: "Meja 1 (VIP)", status: "Reserved" as const },
+                              { id: "tbl-2", name: "Meja 2", status: "Occupied" as const },
+                              { id: "tbl-3", name: "Meja 3", status: "Available" as const },
+                              { id: "tbl-4", name: "Meja 4", status: "Cleaning Needed" as const },
+                              { id: "tbl-5", name: "Meja 5", status: "Available" as const },
+                              { id: "tbl-6", name: "Meja 6", status: "Occupied" as const }
+                            ];
+                            syncState({
+                              ...state,
+                              fohTables: defaults
+                            });
+                            triggerToast("✓ Selesai mereset susunan meja ke standar.");
+                          }
+                        }}
+                        className="bg-red-500/10 hover:bg-red-500/20 active:scale-95 text-red-400 border border-red-500/20 font-mono font-bold px-3 py-2 rounded-xl text-xs cursor-pointer transition"
+                      >
+                        Reset Standar
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* DYNAMIC TABLE EDITOR CENTER (Inline Editable Fields) */}
+                <div className="bg-[#291404]/60 border border-[#D4A853]/20 rounded-2xl p-4 space-y-3 font-sans">
+                  <div className="border-b border-amber-500/10 pb-2">
+                    <h4 className="font-serif font-bold text-xs text-yellow-100 uppercase tracking-wider">
+                      🛠️ Menu Editor Grid Meja Makan (Real-Time Database Sync)
+                    </h4>
+                    <p className="text-[10px] text-amber-200/40 mt-0.5 font-medium">
+                      Ketik langsung pada kolom nama meja di bawah untuk mengganti label, atau klik ikon sampah untuk menghapus meja secara permanen.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 max-h-[180px] overflow-y-auto pr-1">
+                    {tables.map((t, idx) => (
+                      <div key={t.id} className="bg-black/35 border border-amber-500/10 p-2.5 rounded-xl flex items-center justify-between gap-1.5 focus-within:border-amber-400 transition duration-200">
+                        <div className="flex-1 min-w-0">
+                          <span className="text-[8px] font-mono text-amber-400/40 block font-bold">MEJA #{idx + 1}</span>
+                          <input
+                            type="text"
+                            value={t.name}
+                            onChange={(e) => {
+                              const updated = tables.map((x) => x.id === t.id ? { ...x, name: e.target.value } : x);
+                              syncState({
+                                ...state,
+                                fohTables: updated
+                              });
+                            }}
+                            className="bg-transparent text-amber-100 font-bold text-xs border-b border-transparent focus:outline-none w-full py-0.5"
+                            placeholder="Nama Meja"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (confirm(`Hapus ${t.name} secara permanen?`)) {
+                              const updated = tables.filter((x) => x.id !== t.id);
+                              syncState({
+                                ...state,
+                                fohTables: updated
+                              });
+                              triggerToast(`✓ Berhasil menghapus ${t.name}.`);
+                            }
+                          }}
+                          className="text-red-400 hover:text-red-300 p-1.5 hover:bg-red-500/10 rounded transition cursor-pointer shrink-0"
+                          title="Hapus Meja"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
 
                 {/* Color Legend explanation */}

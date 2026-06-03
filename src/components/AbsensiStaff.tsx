@@ -338,7 +338,8 @@ export default function AbsensiStaff({
           setCurrentDistance(dist);
           setCheckingGps(false);
 
-          if (dist <= 100) {
+          const allowedRadius = state.branding.gpsVerificationRadius || 100;
+          if (dist <= allowedRadius) {
             setGpsVerified(true);
             resolve({ lat, lng, tempDistance: dist });
           } else {
@@ -371,7 +372,8 @@ export default function AbsensiStaff({
       if (userCoords) {
         const dist = getDistance(userCoords.lat, userCoords.lng, latNum, lngNum);
         setCurrentDistance(dist);
-        setGpsVerified(dist <= 100);
+        const allowedRadius = state.branding.gpsVerificationRadius || 100;
+        setGpsVerified(dist <= allowedRadius);
       }
       if (onUpdateState) {
         onUpdateState({
@@ -460,6 +462,13 @@ export default function AbsensiStaff({
     }
 
     const isAuthorizedBypass = currentUser?.role === "Owner" || currentUser?.role === "Manager" || currentUser?.role === "Head Barista";
+    const isGpsRequired = state.branding.gpsVerificationEnabled !== false;
+    const allowedRadius = state.branding.gpsVerificationRadius || 100;
+
+    if (!isGpsRequired) {
+      openFaceIdScanner();
+      return;
+    }
 
     if (bypassGps && isAuthorizedBypass) {
       openFaceIdScanner();
@@ -472,10 +481,10 @@ export default function AbsensiStaff({
       const locationRes = await getGpsLocation();
       const distance = locationRes.tempDistance;
       
-      if (distance <= 100) {
+      if (distance <= allowedRadius) {
         openFaceIdScanner();
       } else {
-        alert(`❌ ABSENSI CAFE DITOLAK!\n\nLokasi Anda terdeteksi berjarak ${Math.round(distance)} meter dari cafe.\nKru diwajibkan berada di dalam radius maksimal 100 meter dari cafe untuk dapat absen.\n\nJika ini penugasan luar, pimpinan (Owner/Manager) dapat mengaktifkan opsi 'Bypass GPS' di panel bawah.`);
+        alert(`❌ ABSENSI CAFE DITOLAK!\n\nLokasi Anda terdeteksi berjarak ${Math.round(distance)} meter dari cafe.\nKru diwajibkan berada di dalam radius maksimal ${allowedRadius} meter dari cafe untuk dapat absen.\n\nJika ini penugasan luar atau sinyal GPS bermasalah, pimpinan (Owner/Manager) dapat mengaktifkan opsi 'Bypass GPS' di panel bawah, atau menonaktifkan proteksi GPS sepenuhnya di tab Kustomisasi Brand.`);
       }
     } catch (err: any) {
       alert(`⚠️ ERROR GEOLOCATION:\n${err.message}\n\nPastikan izin lokasi (GPS) pada browser/perangkat Anda diaktifkan.`);

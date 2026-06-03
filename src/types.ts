@@ -14,6 +14,8 @@ export interface BrandBranding {
   lateThresholdMinutes?: number;
   cafeLat?: number;
   cafeLng?: number;
+  gpsVerificationEnabled?: boolean;
+  gpsVerificationRadius?: number;
 }
 
 export interface MasterItem {

@@ -32,7 +32,9 @@ export const initialStats: CoffeeOpsState = {
     shiftMalamEnd: "23:00",
     lateThresholdMinutes: 15,
     cafeLat: -2.1283,
-    cafeLng: 106.1161
+    cafeLng: 106.1161,
+    gpsVerificationEnabled: true,
+    gpsVerificationRadius: 100
   },
   master: defaultMasterItems,
   inventory: {

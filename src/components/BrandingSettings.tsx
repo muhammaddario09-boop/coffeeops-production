@@ -23,6 +23,8 @@ export default function BrandingSettings({ state, onUpdateBranding, onImportBack
   const [shiftMalamStart, setShiftMalamStart] = useState(branding.shiftMalamStart || "20:00");
   const [shiftMalamEnd, setShiftMalamEnd] = useState(branding.shiftMalamEnd || "23:00");
   const [lateThresholdMinutes, setLateThresholdMinutes] = useState(branding.lateThresholdMinutes || 15);
+  const [gpsVerificationEnabled, setGpsVerificationEnabled] = useState(branding.gpsVerificationEnabled !== false);
+  const [gpsVerificationRadius, setGpsVerificationRadius] = useState(branding.gpsVerificationRadius || 100);
 
   const defaultNavItems: NavigationItemSetting[] = [
     { id: "dashboard", label: "Dashboard", icon: "📊", section: "Utama" },
@@ -82,6 +84,10 @@ export default function BrandingSettings({ state, onUpdateBranding, onImportBack
       shiftMalamStart,
       shiftMalamEnd,
       lateThresholdMinutes: Number(lateThresholdMinutes),
+      gpsVerificationEnabled,
+      gpsVerificationRadius: Number(gpsVerificationRadius),
+      cafeLat: branding.cafeLat,
+      cafeLng: branding.cafeLng,
     }, navigationSettings);
   };
 
@@ -240,6 +246,41 @@ export default function BrandingSettings({ state, onUpdateBranding, onImportBack
                     required
                   />
                   <span className="text-xs text-amber-150/60">menit setelah jam masuk shift</span>
+                </div>
+              </div>
+
+              {/* GPS Geofence Check config */}
+              <div className="flex flex-col gap-1.5 col-span-2 border-t border-amber-500/10 pt-4 mt-2 font-sans">
+                <span className="text-[10px] text-amber-300 uppercase tracking-wider font-semibold font-mono flex items-center gap-1.5">
+                  📍 Verifikasi Lokasi GPS (Geofencing Absensi)
+                </span>
+                <p className="text-[10px] text-amber-100/40 leading-normal">
+                  Jika diaktifkan, kru wajib berada dalam radius tertentu dari koordinat cafe untuk absen. Nonaktifkan jika kru banyak bekerja remote atau sinyal GPS ponsel sering meleset.
+                </p>
+                <div className="flex flex-col sm:flex-row gap-4 mt-2 bg-black/20 p-3 rounded-xl border border-amber-500/5">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={gpsVerificationEnabled}
+                      onChange={(e) => setGpsVerificationEnabled(e.target.checked)}
+                      className="rounded border-amber-500/20 text-amber-500 bg-black/40 focus:ring-amber-500 focus:ring-offset-black"
+                    />
+                    <span className="text-xs text-amber-100 font-medium">Batas Geofence Aktif</span>
+                  </label>
+
+                  {gpsVerificationEnabled && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-amber-100/45 shrink-0">Radius Maks:</span>
+                      <input
+                        type="number"
+                        value={gpsVerificationRadius}
+                        onChange={(e) => setGpsVerificationRadius(Math.max(10, Number(e.target.value)))}
+                        className="bg-black/25 border border-amber-500/20 focus:border-[#D4A853]/40 rounded-lg px-2.5 py-1 text-xs text-amber-150 font-mono w-24 outline-none font-bold"
+                        title="Radius toleransi presisi GPS dalam satuan meter"
+                      />
+                      <span className="text-xs text-amber-150/60">meter</span>
+                    </div>
+                  )}
                 </div>
               </div>
 
