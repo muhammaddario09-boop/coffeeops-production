@@ -456,7 +456,7 @@ export default function App() {
       const response = await fetch(getServerUrl("/api/state"));
       if (response.ok) {
         const serverState = await response.json();
-        const mergedState: CoffeeOpsState = {
+        let mergedState: CoffeeOpsState = {
           ...serverState,
           users: serverState.users && serverState.users.length >= 5 ? serverState.users : initialStats.users,
           suppliers: serverState.suppliers || initialStats.suppliers,
@@ -464,6 +464,54 @@ export default function App() {
           pos: serverState.pos || initialStats.pos,
           auditLogs: serverState.auditLogs || initialStats.auditLogs
         };
+
+        // Resilient browser-hardened DB state automatic backup and redeploy recovery engine
+        const savedLocalStateStr = localStorage.getItem("coffeeops_db_state");
+        if (savedLocalStateStr) {
+          try {
+            const localState = JSON.parse(savedLocalStateStr) as CoffeeOpsState;
+            
+            const serverEmpCount = (serverState.employees || []).length;
+            const localEmpCount = (localState.employees || []).length;
+            
+            const serverUserCount = (serverState.users || []).length;
+            const localUserCount = (localState.users || []).length;
+
+            const serverPrCount = (serverState.prs || []).length;
+            const localPrCount = (localState.prs || []).length;
+
+            // Detect server reset (e.g. Vercel redeploy losing database.json)
+            if (
+              (localEmpCount > serverEmpCount && serverEmpCount === 0) || 
+              (localUserCount > serverUserCount && serverUserCount <= 5) ||
+              (localPrCount > serverPrCount && serverPrCount === 0)
+            ) {
+              console.log("[Auto-Recovery] Vercel/Server database reset detected. Auto-recovering database from browser cache...");
+              mergedState = localState;
+              
+              // Feed recovered state back to the newly fresh server
+              fetch(getServerUrl("/api/state"), {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(localState)
+              }).catch(e => console.error("Auto-recovery sync upload failed:", e));
+              
+              // Notify the user with a beautiful elegant toast notification
+              setToastMessage("🔄 Database dipulihkan otomatis dari cache browser!");
+              setTimeout(() => setToastMessage(null), 6000);
+            }
+          } catch (e) {
+            console.error("Local recovery parse failed:", e);
+          }
+        }
+
+        // Cache the successful server state to browser's secure cache
+        try {
+          localStorage.setItem("coffeeops_db_state", JSON.stringify(mergedState));
+        } catch (e) {
+          console.error("Failed to cache database state to localStorage:", e);
+        }
+
         setState(mergedState);
         setIsConnected(true);
         setLastUpdate(getTodayDate());
@@ -480,6 +528,14 @@ export default function App() {
   const syncStateWithServer = async (updatedState: CoffeeOpsState) => {
     // Immediate local state update for fast UX
     setState(updatedState);
+    
+    // Commit to browser persistent localstorage mirroring immediately
+    try {
+      localStorage.setItem("coffeeops_db_state", JSON.stringify(updatedState));
+    } catch (e) {
+      console.error("Failed to commit database state to localStorage:", e);
+    }
+
     try {
       const response = await fetch(getServerUrl("/api/state"), {
         method: "POST",
