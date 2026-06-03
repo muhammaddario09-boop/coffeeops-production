@@ -401,6 +401,28 @@ export interface CoffeeOpsState {
   midtrans_logs?: MidtransLog[];
   midtrans_transactions?: MidtransTransaction[];
   midtrans_settings?: MidtransSettings;
+  kdsQueue?: KdsTicket[];
+}
+
+export interface KdsTicket {
+  id: string;
+  parentOrderId: string;
+  orderNo: string;
+  table: string;
+  items: {
+    name: string;
+    qty: number;
+    notes?: string;
+  }[];
+  department: "BARISTA" | "KITCHEN";
+  timestamp: string;
+  status: "PENDING" | "CONFIRMED" | "IN_PROGRESS" | "READY" | "SERVED" | "COMPLETED" | "CANCELLED";
+  isNew: boolean;
+  history?: {
+    status: string;
+    timestamp: string;
+    updatedBy: string;
+  }[];
 }
 
 export interface PosDevice {

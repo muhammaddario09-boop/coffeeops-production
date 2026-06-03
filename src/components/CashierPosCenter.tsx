@@ -32,7 +32,7 @@ import {
   Tablet,
   Database
 } from "lucide-react";
-import { CoffeeOpsState, User, AuditLogItem } from "../types";
+import { CoffeeOpsState, User, AuditLogItem, KdsTicket } from "../types";
 import {
   posProducts,
   defaultCustomers,
@@ -209,12 +209,17 @@ export default function CashierPosCenter({
     { id: "so-2", table: "Meja 5", time: "Just now", items: "1x Kyoto Uji Matcha, 1x Nasi Goreng Kampung", subtotal: 82000, status: "Pending Decision" }
   ]);
 
-  // Kitchen Display System (KDS) Active Queue state
-  const [kdsQueue, setKdsQueue] = useState<any[]>([
-    { id: "q-101", orderNo: "TX-2051", table: "Meja 2", items: [{ name: "Caffe Latte Full Cream", qty: 2 }, { name: "Beef Carbonara Pasta", qty: 1 }], type: "Barista & Kitchen", timestamp: "10:15", status: "preparing", isNew: false },
-    { id: "q-102", orderNo: "TX-2052", table: "Take Away", items: [{ name: "Nasi Goreng Kampung", qty: 1 }], type: "Kitchen", timestamp: "10:18", status: "pending", isNew: true },
-    { id: "q-103", orderNo: "TX-2049", table: "Meja 1 (VIP)", items: [{ name: "Double Espresso", qty: 1 }], type: "Barista", timestamp: "09:55", status: "completed", isNew: false }
-  ]);
+  // Kitchen Display System (KDS) Active Queue state synced in Cloud Database
+  const kdsQueue: KdsTicket[] = state.kdsQueue || [];
+  const setKdsQueue = (newQueueOrFunc: KdsTicket[] | ((prev: KdsTicket[]) => KdsTicket[])) => {
+    const nextQueue = typeof newQueueOrFunc === "function"
+      ? newQueueOrFunc(state.kdsQueue || [])
+      : newQueueOrFunc;
+    syncState({
+      ...state,
+      kdsQueue: nextQueue
+    });
+  };
 
   // Shift & Cash Drawer Local State preserved inside sessionStorage / localStorage or state
   const [shiftState, setShiftState] = useState<ShiftDrawerState>(() => {
@@ -822,13 +827,55 @@ export default function CashierPosCenter({
       cashClosingExpected: prev.cashClosingExpected + addedCashSales
     }));
 
+    // Split items into separate KDS tickets for Barista vs Kitchen (backward-compatible and production-ready)
+    const drinks = orderDoc.items.filter(i =>
+      ["Espresso", "Milk Beverage", "Manual Brew", "Tea", "Non Coffee"].includes(i.product.category)
+    );
+    const foods = orderDoc.items.filter(i =>
+      ["Food", "Pastry"].includes(i.product.category)
+    );
+
+    const generatedTickets: KdsTicket[] = [];
+    const timestampNow = new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+
+    if (drinks.length > 0) {
+      generatedTickets.push({
+        id: `kds-${generatedOrderNumber}-B`,
+        parentOrderId: generatedOrderNumber,
+        orderNo: generatedOrderNumber,
+        table: selectedTable || "Take Away",
+        items: drinks.map(d => ({ name: d.product.name, qty: d.qty, notes: d.notes })),
+        department: "BARISTA",
+        timestamp: timestampNow,
+        status: "PENDING",
+        isNew: true,
+        history: [{ status: "PENDING", timestamp: timestampNow, updatedBy: labelRole }]
+      });
+    }
+
+    if (foods.length > 0) {
+      generatedTickets.push({
+        id: `kds-${generatedOrderNumber}-K`,
+        parentOrderId: generatedOrderNumber,
+        orderNo: generatedOrderNumber,
+        table: selectedTable || "Take Away",
+        items: foods.map(f => ({ name: f.product.name, qty: f.qty, notes: f.notes })),
+        department: "KITCHEN",
+        timestamp: timestampNow,
+        status: "PENDING",
+        isNew: true,
+        history: [{ status: "PENDING", timestamp: timestampNow, updatedBy: labelRole }]
+      });
+    }
+
     // Construct the updated overall state
     const nextState: CoffeeOpsState = {
       ...state,
       storage: nextStorage,
       inventory: nextInventory,
       issues: nextIssues,
-      sales: [newSaleTran, ...(state.sales || [])]
+      sales: [newSaleTran, ...(state.sales || [])],
+      kdsQueue: [...generatedTickets, ...(state.kdsQueue || [])]
     };
 
     // Sync payload immediately
@@ -1185,39 +1232,120 @@ export default function CashierPosCenter({
     }, 2000);
   };
 
-  // Self-Order acceptance flow
+  // Self-Order acceptance flow (Approved by Cashier)
   const handleAcceptSelfOrder = (order: any) => {
     inform(`✓ Menerima order dari ${order.table} sebesar Rp ${order.subtotal.toLocaleString("id-ID")}`);
-    // Simulate converting this to a real POS checkout or active table status
+    
+    // Convert this to a real POS checkout or active table status
     setSelfOrders(selfOrders.filter(so => so.id !== order.id));
     
     // Auto add to active table order in tablesList
     const matchedTableNum = order.table.replace("Meja ", "");
     const updatedTables = tablesList.map(t => {
       if (t.name.includes(matchedTableNum)) {
-        return { ...t, status: "Occupied" };
+        return { ...t, status: "Occupied" as any };
       }
       return t;
     });
     setTablesList(updatedTables);
-    
-    // Write KDS Queue item for baristas and kitchen
-    const newKdsId = `q-${Math.floor(100 + Math.random() * 900)}`;
-    const itemsList = order.items ? order.items : [{ name: "Kyoto Uji Matcha Latte", qty: 1 }, { name: "Nasi Goreng Kampung", qty: 1 }];
-    setKdsQueue([
-      {
-        id: newKdsId,
-        orderNo: `TX-${Math.floor(1000 + Math.random() * 9000)}`,
+
+    const generatedOrderNumber = `TX-QR-${Math.floor(3000 + Math.random() * 6999)}`;
+    const timestampNow = new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+
+    // Deduce raw items if rawItems exists, or partition general products
+    const rawItems = order.rawItems || [];
+    const drinks = rawItems.filter((i: any) =>
+      ["Espresso", "Milk Beverage", "Manual Brew", "Tea", "Non Coffee"].includes(i.product?.category || "")
+    );
+    const foods = rawItems.filter((i: any) =>
+      ["Food", "Pastry"].includes(i.product?.category || "")
+    );
+
+    const generatedTickets: KdsTicket[] = [];
+    if (drinks.length > 0) {
+      generatedTickets.push({
+        id: `kds-${generatedOrderNumber}-B`,
+        parentOrderId: generatedOrderNumber,
+        orderNo: generatedOrderNumber,
         table: order.table,
-        items: itemsList,
-        type: "Food & Beverage",
-        timestamp: new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }),
-        status: "pending",
-        isNew: true
-      },
-      ...kdsQueue
-    ]);
-    
+        items: drinks.map((d: any) => ({ name: d.product.name, qty: d.qty, notes: d.notes })),
+        department: "BARISTA",
+        timestamp: timestampNow,
+        status: "CONFIRMED", // Cashier approved it, so it transitions to CONFIRMED
+        isNew: true,
+        history: [
+          { status: "PENDING", timestamp: timestampNow, updatedBy: "Pelanggan (QR Scan)" },
+          { status: "CONFIRMED", timestamp: timestampNow, updatedBy: `Kasir (${labelRole})` }
+        ]
+      });
+    }
+
+    if (foods.length > 0) {
+      generatedTickets.push({
+        id: `kds-${generatedOrderNumber}-K`,
+        parentOrderId: generatedOrderNumber,
+        orderNo: generatedOrderNumber,
+        table: order.table,
+        items: foods.map((f: any) => ({ name: f.product.name, qty: f.qty, notes: f.notes })),
+        department: "KITCHEN",
+        timestamp: timestampNow,
+        status: "CONFIRMED", // Cashier approved it, so it transitions to CONFIRMED
+        isNew: true,
+        history: [
+          { status: "PENDING", timestamp: timestampNow, updatedBy: "Pelanggan (QR Scan)" },
+          { status: "CONFIRMED", timestamp: timestampNow, updatedBy: `Kasir (${labelRole})` }
+        ]
+      });
+    }
+
+    // Fallback if no rawItems mapped (e.g. legacy system mock selfOrders)
+    if (generatedTickets.length === 0) {
+      generatedTickets.push({
+        id: `kds-${generatedOrderNumber}-Q`,
+        parentOrderId: generatedOrderNumber,
+        orderNo: generatedOrderNumber,
+        table: order.table,
+        items: [{ name: "Kyoto Uji Matcha Latte", qty: 1 }, { name: "Nasi Goreng Kampung", qty: 1 }],
+        department: "BARISTA",
+        timestamp: timestampNow,
+        status: "CONFIRMED",
+        isNew: true,
+        history: [{ status: "CONFIRMED", timestamp: timestampNow, updatedBy: labelRole }]
+      });
+    }
+
+    // Append to sales history
+    const subtotal = order.subtotal || 82000;
+    const tax = Math.round(subtotal * 0.1);
+    const total = subtotal + tax;
+
+    const newSaleTran = {
+      id: generatedOrderNumber,
+      recipeId: "REC-QR",
+      recipeName: `QR Order: ${order.table} (Approved)`,
+      qty: 2,
+      sellPrice: total,
+      totalRevenue: total,
+      totalCost: Math.round(subtotal * 0.35),
+      date: getLocalDateOnly(),
+      by: "Customer QR Scan"
+    };
+
+    setShiftState(prev => ({
+      ...prev,
+      nonCashSales: prev.nonCashSales + total
+    }));
+
+    syncState({
+      ...state,
+      sales: [newSaleTran, ...(state.sales || [])],
+      kdsQueue: [...generatedTickets, ...(state.kdsQueue || [])],
+      fohTables: updatedTables.map(t => ({
+        ...t,
+        status: (t.status === "Cleaning" ? "Cleaning Needed" : t.status) as any
+      }))
+    });
+
     writeAuditLog(`Self-Order accepted for ${order.table} from customer scan QR Menu`);
   };
 
@@ -1437,9 +1565,9 @@ export default function CashierPosCenter({
               {!isAllowedDef && (
                 <span className="text-[10px] text-amber-500 shrink-0">🔒</span>
               )}
-              {tab.id === "kds" && kdsQueue.filter(q => q.status === "pending").length > 0 && (
+              {tab.id === "kds" && kdsQueue.filter(q => (q.status || "").toUpperCase() === "PENDING" || (q.status || "").toUpperCase() === "CONFIRMED").length > 0 && (
                 <span className="bg-red-500 text-white text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-full shrink-0">
-                  {kdsQueue.filter(q => q.status === "pending").length}
+                  {kdsQueue.filter(q => (q.status || "").toUpperCase() === "PENDING" || (q.status || "").toUpperCase() === "CONFIRMED").length}
                 </span>
               )}
             </button>
@@ -2604,175 +2732,611 @@ export default function CashierPosCenter({
         )}
 
         {/* SECTION 8: KITCHEN DISPLAY SYSTEM (KDS) */}
-        {activeSection === "kds" && (
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className="space-y-6"
-          >
-            <div className="bg-neutral-900 border border-[#D4A853]/15 rounded-xl p-6 shadow space-y-4">
-              <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-[#D4A853]/10 pb-4">
-                <div>
-                  <h3 className="font-serif text-lg font-bold text-amber-100 flex items-center gap-2">
-                    <span className="relative flex h-3 w-3">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#D4A853] opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-3 w-3 bg-[#D4A853]"></span>
-                    </span>
-                    Kitchen Display System (KDS) Monitor
-                  </h3>
-                  <p className="text-xs text-amber-100/40 mt-0.5">Pantau dan kelola antrean antaran kopi (Barista) & makanan (Kitchen) secara realtime.</p>
+        {activeSection === "kds" && (() => {
+          // Dynamic pipeline order ingestion simulation helper
+          const handleIngestOrder = (channel: "QR" | "Waiter" | "Interactive") => {
+            // Locate sample products for robust simulation
+            const latteProd = posProducts.find(p => p.name.toLowerCase().includes("latte")) || posProducts[0];
+            const cappuccinoProd = posProducts.find(p => p.name.toLowerCase().includes("cappuccino")) || posProducts[1];
+            const pastaProd = posProducts.find(p => p.name.toLowerCase().includes("pasta")) || posProducts[2];
+            const croissantProd = posProducts.find(p => p.name.toLowerCase().includes("croissant")) || posProducts[4];
+
+            const tableNames = ["Meja 1", "Meja 3", "Meja 5", "Meja 7 (VIP)", "Meja 8"];
+            const selectedSimTable = tableNames[Math.floor(Math.random() * tableNames.length)];
+            const orderId = `ORD-TX-${Math.floor(1000 + Math.random() * 8999)}`;
+            const timeStr = new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+
+            if (channel === "QR") {
+              const mockQrOrder = {
+                id: `so-qr-${Date.now()}`,
+                table: selectedSimTable,
+                time: "Just now",
+                items: `${latteProd.name} x1, ${croissantProd.name} x1`,
+                subtotal: latteProd.price + croissantProd.price,
+                status: "Pending Decision",
+                rawItems: [
+                  { product: latteProd, qty: 1, notes: "Ice, Less Sugar" },
+                  { product: croissantProd, qty: 1 }
+                ]
+              };
+              setSelfOrders([mockQrOrder, ...selfOrders]);
+              inform(`📲 QR Customer Order Terkirim dari ${selectedSimTable}! Tunggu persetujuan Kasir di tab "Cashier POS Center"`);
+              writeAuditLog(`Customer QR Scan order triggered for ${selectedSimTable}. Waiting approval.`);
+            } else if (channel === "Waiter") {
+              // Waiter order: Bypasses cashier approval, automatically posts sales & deducts stock
+              const subtotal = cappuccinoProd.price + pastaProd.price;
+              const tax = Math.round(subtotal * 0.1);
+              const total = subtotal + tax;
+
+              const newSale = {
+                id: orderId,
+                recipeId: "REC-W",
+                recipeName: `Waiter Mobile: ${selectedSimTable} (${cappuccinoProd.name}, ${pastaProd.name})`,
+                qty: 2,
+                sellPrice: total,
+                totalRevenue: total,
+                totalCost: Math.round(subtotal * 0.35),
+                date: getLocalDateOnly(),
+                by: `Waiter ${labelRole}`
+              };
+
+              // Separate tickets for Barista vs Kitchen in state-machine CONFIRMED status
+              const waiterTickets: KdsTicket[] = [
+                {
+                  id: `kds-${orderId}-B`,
+                  parentOrderId: orderId,
+                  orderNo: orderId,
+                  table: selectedSimTable,
+                  items: [{ name: cappuccinoProd.name, qty: 1, notes: "Hot, Oat milk" }],
+                  department: "BARISTA",
+                  timestamp: timeStr,
+                  status: "CONFIRMED",
+                  isNew: true,
+                  history: [
+                    { status: "PENDING", timestamp: timeStr, updatedBy: "Waiter Handheld" },
+                    { status: "CONFIRMED", timestamp: timeStr, updatedBy: "System Auto-Authorize" }
+                  ]
+                },
+                {
+                  id: `kds-${orderId}-K`,
+                  parentOrderId: orderId,
+                  orderNo: orderId,
+                  table: selectedSimTable,
+                  items: [{ name: pastaProd.name, qty: 1, notes: "Extra Cheese" }],
+                  department: "KITCHEN",
+                  timestamp: timeStr,
+                  status: "CONFIRMED",
+                  isNew: true,
+                  history: [
+                    { status: "PENDING", timestamp: timeStr, updatedBy: "Waiter Handheld" },
+                    { status: "CONFIRMED", timestamp: timeStr, updatedBy: "System Auto-Authorize" }
+                  ]
+                }
+              ];
+
+              // Update tables list
+              const updatedTables = tablesList.map(t => t.name === selectedSimTable ? { ...t, status: "Occupied" as any } : t);
+              setTablesList(updatedTables);
+
+              setShiftState(prev => ({
+                ...prev,
+                nonCashSales: prev.nonCashSales + total
+              }));
+
+              syncState({
+                ...state,
+                sales: [newSale, ...(state.sales || [])],
+                kdsQueue: [...waiterTickets, ...(state.kdsQueue || [])],
+                fohTables: updatedTables.map(t => ({
+                  ...t,
+                  status: (t.status === "Cleaning" ? "Cleaning Needed" : t.status) as any
+                }))
+              });
+
+              inform(`✓ Antrean Waiter ${orderId} otomatis disinkronkan & dikirim langsung ke KDS Monitor sebagai CONFIRMED!`);
+              writeAuditLog(`Waiter handheld pushed verified table transaction ${orderId} for ${selectedSimTable}`);
+            } else {
+              // Interactive Table Device Ordering
+              const subtotal = latteProd.price + 5000;
+              const tax = Math.round(subtotal * 0.1);
+              const total = subtotal + tax;
+
+              const newSale = {
+                id: orderId,
+                recipeId: "REC-IT",
+                recipeName: `Interactive Table Order: ${selectedSimTable} (${latteProd.name})`,
+                qty: 1,
+                sellPrice: total,
+                totalRevenue: total,
+                totalCost: Math.round(subtotal * 0.35),
+                date: getLocalDateOnly(),
+                by: "Interactive Table Client"
+              };
+
+              const tableTicket: KdsTicket[] = [
+                {
+                  id: `kds-${orderId}-B`,
+                  parentOrderId: orderId,
+                  orderNo: orderId,
+                  table: selectedSimTable,
+                  items: [{ name: latteProd.name, qty: 1, notes: "Caramel modifier" }],
+                  department: "BARISTA",
+                  timestamp: timeStr,
+                  status: "PENDING",
+                  isNew: true,
+                  history: [{ status: "PENDING", timestamp: timeStr, updatedBy: "Device Meja Interaktif" }]
+                }
+              ];
+
+              const updatedTables = tablesList.map(t => t.name === selectedSimTable ? { ...t, status: "Occupied" as any } : t);
+              setTablesList(updatedTables);
+
+              setShiftState(prev => ({
+                ...prev,
+                nonCashSales: prev.nonCashSales + total
+              }));
+
+              syncState({
+                ...state,
+                sales: [newSale, ...(state.sales || [])],
+                kdsQueue: [...tableTicket, ...(state.kdsQueue || [])],
+                fohTables: updatedTables.map(t => ({
+                  ...t,
+                  status: (t.status === "Cleaning" ? "Cleaning Needed" : t.status) as any
+                }))
+              });
+
+              inform(`✓ Antrean Device Meja ${orderId} sukses didaftarkan sebagai PENDING (Masak & Racik sekarang!)`);
+              writeAuditLog(`Interactive table terminal logged standalone customer checkout ${orderId} values`);
+            }
+          };
+
+          // State Machine Enforcer (Goal 4 & Goal 8 Audit Log)
+          const transitionKdsStatus = (ticketId: string, nextStatus: "PENDING" | "CONFIRMED" | "IN_PROGRESS" | "READY" | "SERVED" | "COMPLETED" | "CANCELLED") => {
+            const updated = kdsQueue.map(t => {
+              if (t.id === ticketId) {
+                const current = (t.status || "PENDING").toUpperCase() as any;
+                const next = nextStatus.toUpperCase() as any;
+
+                let isAllowed = false;
+                if (current === next) {
+                  isAllowed = true;
+                } else if (current === "PENDING") {
+                  isAllowed = (next === "CONFIRMED" || next === "CANCELLED");
+                } else if (current === "CONFIRMED") {
+                  isAllowed = (next === "IN_PROGRESS" || next === "CANCELLED");
+                } else if (current === "IN_PROGRESS") {
+                  isAllowed = (next === "READY");
+                } else if (current === "READY") {
+                  isAllowed = (next === "SERVED");
+                } else if (current === "SERVED") {
+                  isAllowed = (next === "COMPLETED");
+                }
+
+                if (!isAllowed) {
+                  triggerToast(`❌ Perubahan Status Ditolak: Transisi ${current} ke ${next} ilegal dalam State Machine POS!`);
+                  return t;
+                }
+
+                const timestamp = new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+                const historyEntry = {
+                  status: next,
+                  timestamp,
+                  updatedBy: `${activeRole} (${labelRole})`
+                };
+
+                return {
+                  ...t,
+                  status: next,
+                  isNew: false,
+                  history: [...(t.history || []), historyEntry]
+                };
+              }
+              return t;
+            });
+
+            setKdsQueue(updated);
+          };
+
+          return (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="space-y-6"
+            >
+              {/* Dynamic Connection status & info dashboard header banner */}
+              <div className="bg-neutral-900 border border-[#D4A853]/15 rounded-xl p-5 shadow space-y-4">
+                <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border-b border-[#D4A853]/10 pb-4">
+                  <div>
+                    <h3 className="font-serif text-lg font-bold text-amber-100 flex items-center gap-2">
+                      <span className="relative flex h-3 w-3">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#D4A853] opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-3 w-3 bg-[#D4A853]"></span>
+                      </span>
+                      Kitchen Display System (KDS) Realtime Station
+                    </h3>
+                    <p className="text-xs text-amber-100/40 mt-0.5">Sistem pemrosesan antrean pesanan real-time. Membagi pesanan menjadi tiket Barista & Kitchen secara otomatis.</p>
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        setKdsQueue(kdsQueue.map(q => ({ ...q, isNew: false })));
+                        inform("Semua order ditandai dibaca.");
+                      }}
+                      className="text-[11px] bg-neutral-950 text-amber-100/65 font-bold border border-white/5 px-2.5 py-1.5 rounded-lg hover:text-amber-100 cursor-pointer transition"
+                    >
+                      Tandai Dibaca
+                    </button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => {
-                      const mockOrderNo = `TX-${Math.floor(2053 + Math.random() * 100)}`;
-                      const targetTable = `Meja ${Math.floor(1 + Math.random() * 8)}`;
-                      const newKdsId = `q-${Date.now()}`;
-                      const hasF = Math.random() > 0.5;
-                      const hasB = Math.random() > 0.3;
-                      const fItems = hasF ? [{ name: "Beef Carbonara Pasta", qty: 1 }] : [];
-                      const bItems = hasB ? [{ name: "Caffe Latte Full Cream", qty: 1 }] : [];
-                      const items = [...fItems, ...bItems];
-                      if (items.length === 0) items.push({ name: "Americano Hot / Ice", qty: 1 });
-                      const newKds = {
-                        id: newKdsId,
-                        orderNo: mockOrderNo,
-                        table: targetTable,
-                        items,
-                        type: hasF && hasB ? "Barista & Kitchen" : hasF ? "Kitchen" : "Barista",
-                        timestamp: new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }),
-                        status: "pending",
-                        isNew: true
-                      };
-                      setKdsQueue([newKds, ...kdsQueue]);
-                      if (pluginSettings.kitchenDisplay.soundNotification) {
-                        inform("🔔 Suara Notifikasi Order Baru Berbunyi!");
-                      }
-                      inform(`✓ Order Baru ${mockOrderNo} masuk ke KDS!`);
-                      writeAuditLog(`Simulated new incoming order registered in KDS queue`);
-                    }}
-                    className="bg-[#D4A853]/10 hover:bg-[#D4A853]/20 border border-[#D4A853]/40 text-[#D4A853] px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
-                  >
-                    🚀 Terima Simulasi Customer Order Golem
-                  </button>
-                  <button
-                    onClick={() => {
-                      setKdsQueue(kdsQueue.map(q => ({ ...q, isNew: false })));
-                      inform("Semua order ditandai dibaca.");
-                    }}
-                    className="text-[11px] bg-neutral-950 text-amber-100/65 font-bold border border-white/5 px-2.5 py-1.5 rounded-lg hover:text-amber-100 cursor-pointer"
-                  >
-                    Mark All Seen
-                  </button>
-                </div>
-              </div>
 
-              {/* KDS Columns based on status */}
-              <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-                {["pending", "preparing", "completed", "served"].map((colStatus) => {
-                  const filteredList = kdsQueue.filter(q => q.status === colStatus);
-                  const colTitles: any = {
-                    pending: { title: "Daftar Antrean Bar/Kitchen", color: "border-red-500/20 text-red-400 bg-red-950/10" },
-                    preparing: { title: "Sedang Dikerjakan/Brewing", color: "border-amber-500/20 text-amber-400 bg-amber-950/10" },
-                    completed: { title: "Selesai Siap Diantar", color: "border-emerald-500/20 text-emerald-400 bg-emerald-950/10" },
-                    served: { title: "Telah Disajikan ke Meja", color: "border-neutral-800 text-neutral-400 bg-neutral-950/10" }
-                  };
-                  return (
-                    <div key={colStatus} className="bg-black/40 border border-white/5 rounded-xl p-4 font-sans flex flex-col h-[520px]">
-                      <div className={`p-2 rounded-lg border text-center font-bold text-xs ${colTitles[colStatus].color} mb-3 flex items-center justify-between`}>
-                        <span>{colTitles[colStatus].title}</span>
-                        <span className="font-mono text-[10px] bg-neutral-800 px-2 py-0.5 rounded-full text-white">{filteredList.length}</span>
-                      </div>
-
-                      <div className="space-y-3 flex-1 overflow-y-auto pr-1">
-                        {filteredList.length === 0 ? (
-                          <div className="text-center py-8 text-[11px] text-amber-100/10 font-medium">Empty Queue</div>
-                        ) : (
-                          filteredList.map((item) => (
-                            <div
-                              key={item.id}
-                              className={`p-3 rounded-xl border relative transition ${
-                                item.isNew
-                                  ? "border-red-500 bg-red-950/15 animate-pulse"
-                                  : item.status === "preparing"
-                                  ? "border-[#D4A853]/40 bg-neutral-900/60"
-                                  : item.status === "completed"
-                                  ? "border-emerald-500/40 bg-emerald-950/5"
-                                  : "border-white/5 bg-neutral-950/40 opacity-75"
-                              }`}
-                            >
-                              <div className="flex items-center justify-between border-b border-white/5 pb-1.5 mb-2">
-                                <span className="font-mono text-xs font-bold text-amber-50">{item.orderNo}</span>
-                                <span className="font-bold text-[10px] bg-[#D4A853]/15 text-[#D4A853] px-2 py-0.5 rounded-full">{item.table}</span>
-                              </div>
-
-                              <ul className="space-y-1.5 text-xs text-amber-100/75 font-sans mb-3">
-                                {item.items.map((it: any, itIdx: number) => (
-                                  <li key={itIdx} className="flex justify-between font-medium">
-                                    <span>• {it.name}</span>
-                                    <span className="font-mono text-[#D4A853] font-bold">x{it.qty}</span>
-                                  </li>
-                                ))}
-                              </ul>
-
-                              <div className="flex items-center justify-between text-[10px] text-amber-100/35 font-mono">
-                                <span>{item.timestamp} wib</span>
-                                <span className="uppercase text-[9px] font-bold text-white bg-neutral-800 px-1.5 rounded">{item.type}</span>
-                              </div>
-
-                              {/* Interactive Action Buttons */}
-                              <div className="flex items-center justify-end gap-1 border-t border-white/5 pt-2.5 mt-2.5">
-                                {item.status === "pending" && (
-                                  <button
-                                    onClick={() => {
-                                      setKdsQueue(kdsQueue.map(q => q.id === item.id ? { ...q, status: "preparing", isNew: false } : q));
-                                      inform(`✓ Order ${item.orderNo} mulai dikerjakan.`);
-                                    }}
-                                    className="bg-amber-500/20 text-amber-300 border border-amber-500/30 hover:bg-amber-500 hover:text-black py-1 px-2.5 rounded font-bold text-[9px] uppercase cursor-pointer"
-                                  >
-                                    Brew / Cook
-                                  </button>
-                                )}
-                                {item.status === "preparing" && (
-                                  <button
-                                    onClick={() => {
-                                      setKdsQueue(kdsQueue.map(q => q.id === item.id ? { ...q, status: "completed" } : q));
-                                      inform(`✓ Order ${item.orderNo} siap diantar!`);
-                                    }}
-                                    className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500 hover:text-black py-1 px-2.5 rounded font-bold text-[9px] uppercase cursor-pointer"
-                                  >
-                                    Done
-                                  </button>
-                                )}
-                                {item.status === "completed" && (
-                                  <button
-                                    onClick={() => {
-                                      setKdsQueue(kdsQueue.map(q => q.id === item.id ? { ...q, status: "served" } : q));
-                                      inform(`✓ Order ${item.orderNo} selesai disajikan ke meja.`);
-                                    }}
-                                    className="bg-slate-500/10 text-slate-300 border border-slate-500/30 hover:bg-slate-500 hover:text-black py-1 px-2.5 rounded font-bold text-[9px] uppercase cursor-pointer"
-                                  >
-                                    Serve
-                                  </button>
-                                )}
-                                {item.status === "served" && (
-                                  <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-1 font-mono">
-                                    ✓ Served
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          ))
-                        )}
-                      </div>
+                {/* REAL ORDER PIPELINE INGESTION PORTAL */}
+                <div className="bg-[#180a02] border border-[#D4A853]/15 rounded-xl p-4.5 space-y-3.5">
+                  <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                    <div className="flex items-center gap-2 text-xs font-mono font-bold text-amber-100 uppercase tracking-widest text-[#D4A853]">
+                      <span>📲 Real Order Pipeline Ingestion Simulator</span>
                     </div>
-                  );
-                })}
+                    <span className="text-[10px] text-amber-100/35 font-mono">Select Source Inbound Channel</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <button
+                      onClick={() => handleIngestOrder("QR")}
+                      className="p-3 bg-neutral-900 border border-amber-500/20 hover:border-[#D4A853]/60 rounded-xl text-left cursor-pointer transition group"
+                    >
+                      <div className="text-base">📱 QR Order Customer</div>
+                      <div className="text-[10px] text-amber-100/45 group-hover:text-amber-150/70 mt-1 leading-relaxed">
+                        Simulasikan pelanggan memindai QR menu di meja. Order masuk sebagai <b>PENDING approval</b> di tab kasir.
+                      </div>
+                    </button>
+
+                    <button
+                      onClick={() => handleIngestOrder("Waiter")}
+                      className="p-3 bg-neutral-900 border border-green-500/20 hover:border-green-500/50 rounded-xl text-left cursor-pointer transition group"
+                    >
+                      <div className="text-base text-emerald-300">📋 Waiter Mobile Order</div>
+                      <div className="text-[10px] text-amber-100/45 group-hover:text-amber-150/70 mt-1 leading-relaxed">
+                        Sistem mobile waiter. Bypasses kasir, memotong stok, membukukan omset otomatis & cetak tiket KDS sebagai <b>CONFIRMED</b>.
+                      </div>
+                    </button>
+
+                    <button
+                      onClick={() => handleIngestOrder("Interactive")}
+                      className="p-3 bg-neutral-900 border border-blue-500/20 hover:border-blue-500/50 rounded-xl text-left cursor-pointer transition group"
+                    >
+                      <div className="text-base text-blue-300">🖥️ Meja Interaktif Device</div>
+                      <div className="text-[10px] text-amber-100/45 group-hover:text-amber-150/70 mt-1 leading-relaxed">
+                        Simulasikan pesanan langsung dari tablet meja interaktif customer. Mengirim antrean pesanan dalam status <b>PENDING</b>.
+                      </div>
+                    </button>
+                  </div>
+                </div>
+
+                {/* State Machine Columns */}
+                <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+                  {/* Column 1: Order Queue (PENDING / CONFIRMED) */}
+                  <div className="bg-black/40 border border-white/5 rounded-xl p-4 font-sans flex flex-col h-[520px]">
+                    <div className="p-2 rounded-lg border text-center font-bold text-xs border-yellow-500/20 text-yellow-500 bg-yellow-950/10 mb-3 flex items-center justify-between">
+                      <span>📝 Order Antrean / Confirmed</span>
+                      <span className="font-mono text-[10px] bg-neutral-800 px-2 py-0.5 rounded-full text-white">
+                        {kdsQueue.filter(q => {
+                          const s = (q.status || "").toUpperCase();
+                          return s === "PENDING" || s === "CONFIRMED";
+                        }).length}
+                      </span>
+                    </div>
+
+                    <div className="space-y-3 flex-1 overflow-y-auto pr-1">
+                      {kdsQueue.filter(q => {
+                        const s = (q.status || "").toUpperCase();
+                        return s === "PENDING" || s === "CONFIRMED";
+                      }).length === 0 ? (
+                        <div className="text-center py-12 text-[11px] text-amber-100/10 font-bold uppercase tracking-wider font-mono">No Queue</div>
+                      ) : (
+                        kdsQueue.filter(q => {
+                          const s = (q.status || "").toUpperCase();
+                          return s === "PENDING" || s === "CONFIRMED";
+                        }).map((item) => (
+                          <div
+                            key={item.id}
+                            className={`p-3 rounded-xl border relative transition bg-neutral-900/60 ${
+                              item.isNew ? "border-red-500 bg-red-950/10 animate-pulse" : "border-white/5"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between border-b border-white/5 pb-1.5 mb-2">
+                              <span className="font-mono text-xs font-bold text-amber-200">{item.orderNo}</span>
+                              <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase font-mono ${
+                                item.department === "BARISTA" ? "bg-amber-500/15 text-amber-300" : "bg-teal-500/15 text-teal-300"
+                              }`}>
+                                {item.department}
+                              </span>
+                            </div>
+
+                            <div className="text-[10px] bg-black/40 px-2 py-1 rounded text-amber-100/50 mb-2 font-mono flex items-center justify-between">
+                              <span>Lokasi: <b>{item.table}</b></span>
+                              <span className="uppercase text-[8px] tracking-wider font-bold text-[#D4A853]">{item.status}</span>
+                            </div>
+
+                            <ul className="space-y-1 text-xs text-amber-50 mb-3 ml-2 font-medium">
+                              {item.items.map((it: any, idx: number) => (
+                                <li key={idx} className="flex justify-between">
+                                  <span>• {it.name}</span>
+                                  <span className="font-mono text-amber-400">x{it.qty}</span>
+                                </li>
+                              ))}
+                            </ul>
+
+                            {/* Show Expandable Audit Trail History Log (Goal 8) */}
+                            {item.history && item.history.length > 0 && (
+                              <div className="border-t border-white/5 pt-1.5 mt-1.5 text-[8px] font-mono text-amber-100/40 space-y-0.5">
+                                <div className="text-[7px] uppercase font-bold text-amber-300">Transition Logs:</div>
+                                {item.history.map((h, hIdx) => (
+                                  <div key={hIdx}>[{h.timestamp}] {h.status} by {h.updatedBy}</div>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* Action Row */}
+                            <div className="flex items-center justify-end gap-1.5 border-t border-white/5 pt-2 mt-2.5">
+                              {item.status.toUpperCase() === "PENDING" && (
+                                <>
+                                  <button
+                                    onClick={() => transitionKdsStatus(item.id, "CONFIRMED")}
+                                    className="bg-[#D4A853]/20 text-[#D4A853] border border-[#D4A853]/30 hover:bg-[#D4A853] hover:text-black font-bold py-1 px-2 rounded text-[9px] uppercase cursor-pointer"
+                                  >
+                                    Confirm
+                                  </button>
+                                  <button
+                                    onClick={() => transitionKdsStatus(item.id, "CANCELLED")}
+                                    className="bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500 hover:text-white font-bold py-1 px-2 rounded text-[9px] uppercase cursor-pointer"
+                                  >
+                                    Cancel
+                                  </button>
+                                </>
+                              )}
+                              {item.status.toUpperCase() === "CONFIRMED" && (
+                                <>
+                                  <button
+                                    onClick={() => transitionKdsStatus(item.id, "IN_PROGRESS")}
+                                    className="bg-blue-500/20 text-blue-300 border border-blue-500/30 hover:bg-blue-500 hover:text-white font-bold py-1 px-2.5 rounded text-[9px] uppercase cursor-pointer"
+                                  >
+                                    🍳 Start Cook/Brew
+                                  </button>
+                                  <button
+                                    onClick={() => transitionKdsStatus(item.id, "CANCELLED")}
+                                    className="bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500 hover:text-white font-bold py-1 px-2 rounded text-[9px] uppercase cursor-pointer"
+                                  >
+                                    Cancel
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Column 2: In Progress */}
+                  <div className="bg-black/40 border border-white/5 rounded-xl p-4 font-sans flex flex-col h-[520px]">
+                    <div className="p-2 rounded-lg border text-center font-bold text-xs border-indigo-500/20 text-indigo-400 bg-indigo-950/10 mb-3 flex items-center justify-between">
+                      <span>🍳 Sedang Dikerjakan</span>
+                      <span className="font-mono text-[10px] bg-neutral-800 px-2 py-0.5 rounded-full text-white">
+                        {kdsQueue.filter(q => {
+                          const s = (q.status || "").toUpperCase();
+                          return s === "IN_PROGRESS" || s === "PREPARING";
+                        }).length}
+                      </span>
+                    </div>
+
+                    <div className="space-y-3 flex-1 overflow-y-auto pr-1">
+                      {kdsQueue.filter(q => {
+                        const s = (q.status || "").toUpperCase();
+                        return s === "IN_PROGRESS" || s === "PREPARING";
+                      }).length === 0 ? (
+                        <div className="text-center py-12 text-[11px] text-amber-100/10 font-bold uppercase tracking-wider font-mono">No active cook</div>
+                      ) : (
+                        kdsQueue.filter(q => {
+                          const s = (q.status || "").toUpperCase();
+                          return s === "IN_PROGRESS" || s === "PREPARING";
+                        }).map((item) => (
+                          <div
+                            key={item.id}
+                            className="p-3 rounded-xl border border-blue-500/30 bg-neutral-900/60 relative transition"
+                          >
+                            <div className="flex items-center justify-between border-b border-white/5 pb-1.5 mb-2">
+                              <span className="font-mono text-xs font-bold text-amber-200">{item.orderNo}</span>
+                              <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase font-mono ${
+                                item.department === "BARISTA" ? "bg-amber-500/15 text-amber-300" : "bg-teal-500/15 text-teal-300"
+                              }`}>
+                                {item.department}
+                              </span>
+                            </div>
+
+                            <div className="text-[10px] bg-black/40 px-2 py-1 rounded text-amber-100/50 mb-2 font-mono flex items-center justify-between">
+                              <span>Lokasi: <b>{item.table}</b></span>
+                              <span className="text-blue-400 font-bold text-[9px]">⏱️ IN_PROGRESS</span>
+                            </div>
+
+                            <ul className="space-y-1 text-xs text-amber-50 mb-3 ml-2 font-medium">
+                              {item.items.map((it: any, idx: number) => (
+                                <li key={idx} className="flex justify-between">
+                                  <span>• {it.name}</span>
+                                  <span className="font-mono text-amber-400">x{it.qty}</span>
+                                </li>
+                              ))}
+                            </ul>
+
+                            {item.history && item.history.length > 0 && (
+                              <div className="border-t border-white/5 pt-1.5 mt-1.5 text-[8px] font-mono text-amber-100/40 space-y-0.5">
+                                <div className="text-[7px] uppercase font-bold text-amber-300">Transition Logs:</div>
+                                {item.history.map((h, hIdx) => (
+                                  <div key={hIdx}>[{h.timestamp}] {h.status} by {h.updatedBy}</div>
+                                ))}
+                              </div>
+                            )}
+
+                            <div className="flex items-center justify-end gap-1.5 border-t border-white/5 pt-2 mt-2.5">
+                              <button
+                                onClick={() => transitionKdsStatus(item.id, "READY")}
+                                className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/35 hover:bg-emerald-500 hover:text-black py-1 px-3 rounded text-[9px] uppercase cursor-pointer"
+                              >
+                                🔔 Ready / Done
+                              </button>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Column 3: Selesai Siap Saji */}
+                  <div className="bg-black/40 border border-white/5 rounded-xl p-4 font-sans flex flex-col h-[520px]">
+                    <div className="p-2 rounded-lg border text-center font-bold text-xs border-emerald-500/20 text-emerald-400 bg-emerald-950/10 mb-3 flex items-center justify-between">
+                      <span>🔔 Selesai Siap Diantar</span>
+                      <span className="font-mono text-[10px] bg-neutral-800 px-2 py-0.5 rounded-full text-white">
+                        {kdsQueue.filter(q => (q.status || "").toUpperCase() === "READY").length}
+                      </span>
+                    </div>
+
+                    <div className="space-y-3 flex-1 overflow-y-auto pr-1">
+                      {kdsQueue.filter(q => (q.status || "").toUpperCase() === "READY").length === 0 ? (
+                        <div className="text-center py-12 text-[11px] text-amber-100/10 font-bold uppercase tracking-wider font-mono">No meals ready</div>
+                      ) : (
+                        kdsQueue.filter(q => (q.status || "").toUpperCase() === "READY").map((item) => (
+                          <div
+                            key={item.id}
+                            className="p-3 rounded-xl border border-emerald-500/30 bg-neutral-900/40 relative transition animate-pulse"
+                          >
+                            <div className="flex items-center justify-between border-b border-white/5 pb-1.5 mb-2">
+                              <span className="font-mono text-xs font-bold text-amber-200">{item.orderNo}</span>
+                              <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase font-mono ${
+                                item.department === "BARISTA" ? "bg-amber-500/15 text-amber-300" : "bg-teal-500/15 text-teal-300"
+                              }`}>
+                                {item.department}
+                              </span>
+                            </div>
+
+                            <div className="text-[10px] bg-black/40 px-2 py-1 rounded text-amber-100/50 mb-2 font-mono flex items-center justify-between">
+                              <span>Lokasi: <b>{item.table}</b></span>
+                              <span className="text-emerald-400 font-bold text-[9px]">🔔 READY</span>
+                            </div>
+
+                            <ul className="space-y-1 text-xs text-amber-50 mb-3 ml-2 font-medium">
+                              {item.items.map((it: any, idx: number) => (
+                                <li key={idx} className="flex justify-between">
+                                  <span>• {it.name}</span>
+                                  <span className="font-mono text-amber-400">x{it.qty}</span>
+                                </li>
+                              ))}
+                            </ul>
+
+                            {item.history && item.history.length > 0 && (
+                              <div className="border-t border-white/5 pt-1.5 mt-1.5 text-[8px] font-mono text-amber-100/40 space-y-0.5">
+                                <div className="text-[7px] uppercase font-bold text-amber-300">Transition Logs:</div>
+                                {item.history.map((h, hIdx) => (
+                                  <div key={hIdx}>[{h.timestamp}] {h.status} by {h.updatedBy}</div>
+                                ))}
+                              </div>
+                            )}
+
+                            <div className="flex items-center justify-end gap-1.5 border-t border-white/5 pt-2 mt-2.5">
+                              <button
+                                onClick={() => transitionKdsStatus(item.id, "SERVED")}
+                                className="bg-amber-500/20 text-amber-300 border border-amber-500/35 hover:bg-amber-500 hover:text-black font-bold py-1 px-3 rounded text-[9px] uppercase cursor-pointer"
+                              >
+                                🍽️ Deliver / Serve
+                              </button>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Column 4: Disajikan & Selesai */}
+                  <div className="bg-black/40 border border-white/5 rounded-xl p-4 font-sans flex flex-col h-[520px]">
+                    <div className="p-2 rounded-lg border text-center font-bold text-xs border-neutral-800 text-neutral-400 bg-neutral-950/20 mb-3 flex items-center justify-between">
+                      <span>✅ Serviced & Terminal</span>
+                      <span className="font-mono text-[10px] bg-neutral-800 px-2 py-0.5 rounded-full text-white">
+                        {kdsQueue.filter(q => {
+                          const s = (q.status || "").toUpperCase();
+                          return s === "SERVED" || s === "COMPLETED" || s === "CANCELLED";
+                        }).length}
+                      </span>
+                    </div>
+
+                    <div className="space-y-3 flex-1 overflow-y-auto pr-1">
+                      {kdsQueue.filter(q => {
+                        const s = (q.status || "").toUpperCase();
+                        return s === "SERVED" || s === "COMPLETED" || s === "CANCELLED";
+                      }).length === 0 ? (
+                        <div className="text-center py-12 text-[11px] text-amber-100/10 font-bold uppercase tracking-wider font-mono">No terminal orders</div>
+                      ) : (
+                        kdsQueue.filter(q => {
+                          const s = (q.status || "").toUpperCase();
+                          return s === "SERVED" || s === "COMPLETED" || s === "CANCELLED";
+                        }).map((item) => (
+                          <div
+                            key={item.id}
+                            className="p-3 rounded-xl border border-white/5 bg-neutral-950/40 opacity-70 relative transition"
+                          >
+                            <div className="flex items-center justify-between border-b border-white/5 pb-1.5 mb-2">
+                              <span className="font-mono text-xs font-bold text-amber-200">{item.orderNo}</span>
+                              <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold uppercase font-mono ${
+                                item.department === "BARISTA" ? "bg-amber-500/15 text-amber-300" : "bg-teal-500/15 text-teal-300"
+                              }`}>
+                                {item.department}
+                              </span>
+                            </div>
+
+                            <div className="text-[10px] bg-black/40 px-2 py-1 rounded text-amber-100/50 mb-2 font-mono flex items-center justify-between">
+                              <span>Lokasi: <b>{item.table}</b></span>
+                              <span className={`font-bold text-[9px] ${
+                                item.status.toUpperCase() === "CANCELLED" ? "text-red-400" : "text-emerald-400"
+                              }`}>✓ {item.status}</span>
+                            </div>
+
+                            <ul className="space-y-1 text-xs text-amber-50 mb-3 ml-2 font-medium">
+                              {item.items.map((it: any, idx: number) => (
+                                <li key={idx} className="flex justify-between">
+                                  <span>• {it.name}</span>
+                                  <span className="font-mono text-amber-400">x{it.qty}</span>
+                                </li>
+                              ))}
+                            </ul>
+
+                            {item.history && item.history.length > 0 && (
+                              <div className="border-t border-white/5 pt-1.5 mt-1.5 text-[8px] font-mono text-amber-100/40 space-y-0.5">
+                                <div className="text-[7px] uppercase font-bold text-amber-300">Transition Logs:</div>
+                                {item.history.map((h, hIdx) => (
+                                  <div key={hIdx}>[{h.timestamp}] {h.status} by {h.updatedBy}</div>
+                                ))}
+                              </div>
+                            )}
+
+                            {item.status.toUpperCase() === "SERVED" && (
+                              <div className="flex items-center justify-end border-t border-white/5 pt-2 mt-2">
+                                <button
+                                  onClick={() => transitionKdsStatus(item.id, "COMPLETED")}
+                                  className="bg-[#D4A853]/20 text-[#D4A853] border border-[#D4A853]/30 hover:bg-[#D4A853] hover:text-black font-bold py-1 px-3 rounded text-[9px] uppercase cursor-pointer"
+                                >
+                                  Complete Ticket
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
               </div>
-            </div>
-          </motion.div>
-        )}
+            </motion.div>
+          );
+        })()}
 
         {/* SECTION 9: ENTERPRISE ROADMAP PLUGINS */}
         {activeSection === "plugins" && (

@@ -122,7 +122,8 @@ function mergeLoadedState(loaded: Partial<CoffeeOpsState>): CoffeeOpsState {
     employeeTasks: loaded.employeeTasks || [],
     employeeKpis: loaded.employeeKpis || [],
     customerFeedbacks: loaded.customerFeedbacks || [],
-    incidentReports: loaded.incidentReports || []
+    incidentReports: loaded.incidentReports || [],
+    kdsQueue: loaded.kdsQueue || initialStats.kdsQueue
   };
 
   performEmployeeMapping(merged);

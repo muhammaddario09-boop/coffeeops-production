@@ -1024,5 +1024,68 @@ export const initialStats: CoffeeOpsState = {
     status: "disconnected",
     webhookVerified: false,
     isSandbox: true
-  }
+  },
+  kdsQueue: [
+    {
+      id: "ticket-101-B",
+      parentOrderId: "POS-2051",
+      orderNo: "POS-2051",
+      table: "Meja 2",
+      items: [{ name: "Caffe Latte Full Cream", qty: 2 }],
+      department: "BARISTA",
+      timestamp: "10:15",
+      status: "IN_PROGRESS",
+      isNew: false,
+      history: [
+        { status: "PENDING", timestamp: "10:15", updatedBy: "Kasir" },
+        { status: "CONFIRMED", timestamp: "10:16", updatedBy: "Kasir" },
+        { status: "IN_PROGRESS", timestamp: "10:17", updatedBy: "Barista" }
+      ]
+    },
+    {
+      id: "ticket-101-K",
+      parentOrderId: "POS-2051",
+      orderNo: "POS-2051",
+      table: "Meja 2",
+      items: [{ name: "Beef Carbonara Pasta", qty: 1 }],
+      department: "KITCHEN",
+      timestamp: "10:15",
+      status: "PENDING",
+      isNew: true,
+      history: [
+        { status: "PENDING", timestamp: "10:15", updatedBy: "Kasir" }
+      ]
+    },
+    {
+      id: "ticket-102-K",
+      parentOrderId: "POS-2052",
+      orderNo: "POS-2052",
+      table: "Take Away",
+      items: [{ name: "Nasi Goreng Kampung", qty: 1 }],
+      department: "KITCHEN",
+      timestamp: "10:18",
+      status: "PENDING",
+      isNew: true,
+      history: [
+        { status: "PENDING", timestamp: "10:18", updatedBy: "Kasir" }
+      ]
+    },
+    {
+      id: "ticket-103-B",
+      parentOrderId: "POS-2049",
+      orderNo: "POS-2049",
+      table: "Meja 1 (VIP)",
+      items: [{ name: "Double Espresso", qty: 1 }],
+      department: "BARISTA",
+      timestamp: "09:55",
+      status: "READY",
+      isNew: false,
+      history: [
+        { status: "PENDING", timestamp: "09:55", updatedBy: "Kasir" },
+        { status: "CONFIRMED", timestamp: "09:56", updatedBy: "Kasir" },
+        { status: "IN_PROGRESS", timestamp: "09:58", updatedBy: "Barista" },
+        { status: "READY", timestamp: "10:02", updatedBy: "Barista" }
+      ]
+    }
+  ]
 };
