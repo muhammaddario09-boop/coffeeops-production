@@ -63,14 +63,8 @@ export default function CashierPosCenter({
   const actualRole = currentUser?.role || "Cashier";
   const labelRole = currentUser?.name || "Kasir Utama";
 
-  // Role Emulation and Permission Management
-  const [activeRole, setActiveRole] = useState<"Owner" | "Manager" | "Cashier" | "FOH" | "Barista">(() => {
-    return (actualRole as any) || "Cashier";
-  });
-
-  useEffect(() => {
-    setActiveRole((actualRole as any) || "Cashier");
-  }, [actualRole]);
+  // Role and Permission Management
+  const activeRole = (actualRole as any) || "Cashier";
 
   // Enterprise POS Collections
   const [devices, setDevices] = useState<any[]>(() => {
@@ -1485,37 +1479,7 @@ export default function CashierPosCenter({
           </p>
         </div>
 
-        {/* Roles Access Quick Switching with Dynamic Emulator */}
         <div className="flex flex-col md:flex-row items-start md:items-center gap-4 w-full lg:w-auto">
-          {/* Role Choice dropdown emulator */}
-          <div className="flex items-center gap-2 bg-neutral-950 border border-[#D4A853]/30 px-3 py-2 rounded-xl">
-            <ShieldCheck className="h-4 w-4 text-[#D4A853]" />
-            <div className="flex flex-col">
-              <span className="text-[9px] text-[#D4A853] font-mono leading-none tracking-widest font-bold uppercase">Role Emulasi</span>
-              <select
-                value={activeRole}
-                onChange={(e) => {
-                  const nextRole = e.target.value as any;
-                  setActiveRole(nextRole);
-                  // Auto redirect if active tab is totally blocked
-                  const check = checkTabPermStatic(nextRole, activeSection);
-                  if (!check) {
-                    setActiveSection("dashboard");
-                  }
-                  inform(`✓ Hak akses emulasi diubah ke: ${nextRole}`);
-                  writeAuditLog(`Switched active access role workspace to: ${nextRole}`);
-                }}
-                className="bg-transparent text-amber-50 text-xs font-bold border-0 focus:ring-0 focus:outline-none cursor-pointer p-0 mt-0.5"
-              >
-                <option value="Owner" className="bg-neutral-900 text-amber-100">Owner 👑 (Full Access)</option>
-                <option value="Manager" className="bg-neutral-900 text-amber-100">Manager 💼 (Edit & voids)</option>
-                <option value="Cashier" className="bg-neutral-900 text-amber-100">Cashier 💵 (Sales & Shift)</option>
-                <option value="FOH" className="bg-neutral-900 text-amber-100">Front of House 🍽️ (Waitstaff)</option>
-                <option value="Barista" className="bg-neutral-900 text-amber-100">Barista ☕ (KDS Preparation)</option>
-              </select>
-            </div>
-          </div>
-
           <button
             onClick={() => {
               if (activeRole !== "Owner" && activeRole !== "Manager") {
@@ -2976,9 +2940,9 @@ export default function CashierPosCenter({
                 <div className="bg-[#180a02] border border-[#D4A853]/15 rounded-xl p-4.5 space-y-3.5">
                   <div className="flex items-center justify-between border-b border-white/5 pb-2">
                     <div className="flex items-center gap-2 text-xs font-mono font-bold text-amber-100 uppercase tracking-widest text-[#D4A853]">
-                      <span>📲 Real Order Pipeline Ingestion Simulator</span>
+                      <span>📲 Live Order Inbound Gateway - Active Outlets</span>
                     </div>
-                    <span className="text-[10px] text-amber-100/35 font-mono">Select Source Inbound Channel</span>
+                    <span className="text-[10px] text-amber-100/35 font-mono">Select Active Inbound Channel</span>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -2986,9 +2950,9 @@ export default function CashierPosCenter({
                       onClick={() => handleIngestOrder("QR")}
                       className="p-3 bg-neutral-900 border border-amber-500/20 hover:border-[#D4A853]/60 rounded-xl text-left cursor-pointer transition group"
                     >
-                      <div className="text-base">📱 QR Order Customer</div>
+                      <div className="text-base">📱 QR Order Customer Portal</div>
                       <div className="text-[10px] text-amber-100/45 group-hover:text-amber-150/70 mt-1 leading-relaxed">
-                        Simulasikan pelanggan memindai QR menu di meja. Order masuk sebagai <b>PENDING approval</b> di tab kasir.
+                        Input direct dari pelanggan memindai QR meja harian. Order langsung terdaftar as <b>PENDING approval</b> di stasiun kasir utama.
                       </div>
                     </button>
 
@@ -2996,9 +2960,9 @@ export default function CashierPosCenter({
                       onClick={() => handleIngestOrder("Waiter")}
                       className="p-3 bg-neutral-900 border border-green-500/20 hover:border-green-500/50 rounded-xl text-left cursor-pointer transition group"
                     >
-                      <div className="text-base text-emerald-300">📋 Waiter Mobile Order</div>
+                      <div className="text-base text-emerald-300">📋 Waiter Mobile POS Handheld</div>
                       <div className="text-[10px] text-amber-100/45 group-hover:text-amber-150/70 mt-1 leading-relaxed">
-                        Sistem mobile waiter. Bypasses kasir, memotong stok, membukukan omset otomatis & cetak tiket KDS sebagai <b>CONFIRMED</b>.
+                        Input dinamis dari device genggam kru di lapangan (FOH). Tanpa kasir, potong stok instan, & kirim tiket KDS langsung status <b>CONFIRMED</b>.
                       </div>
                     </button>
 
@@ -3006,9 +2970,9 @@ export default function CashierPosCenter({
                       onClick={() => handleIngestOrder("Interactive")}
                       className="p-3 bg-neutral-900 border border-blue-500/20 hover:border-blue-500/50 rounded-xl text-left cursor-pointer transition group"
                     >
-                      <div className="text-base text-blue-300">🖥️ Meja Interaktif Device</div>
+                      <div className="text-base text-blue-300">🖥️ Meja Interaktif Terminal Client</div>
                       <div className="text-[10px] text-amber-100/45 group-hover:text-amber-150/70 mt-1 leading-relaxed">
-                        Simulasikan pesanan langsung dari tablet meja interaktif customer. Mengirim antrean pesanan dalam status <b>PENDING</b>.
+                        Input langsung dari tablet/layar sentuh permanen meja digital customer. Mengirimkan antrean pesanan dalam status <b>PENDING</b>.
                       </div>
                     </button>
                   </div>
@@ -3609,7 +3573,7 @@ export default function CashierPosCenter({
           </motion.div>
         )}
         
-        {/* ACCESS OVERLAY IF RESTRICTED IN EMULATION */}
+        {/* ACCESS OVERLAY IF RESTRICTED */}
         {!checkTabPermStatic(activeRole, activeSection) && (
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
@@ -3624,10 +3588,10 @@ export default function CashierPosCenter({
             <div className="space-y-2">
               <h3 className="font-serif text-2xl font-bold text-amber-50 tracking-tight">🔒 Akses Modul Terbatas</h3>
               <p className="text-sm text-[#D4A853] font-semibold font-mono tracking-wide">
-                Role Emulasi: {activeRole.toUpperCase()} • Akses Ditolak
+                Role Anda: {activeRole.toUpperCase()} • Akses Ditolak
               </p>
               <p className="text-xs text-amber-100/40 max-w-sm mx-auto leading-relaxed">
-                Modul <span className="font-bold text-amber-100">"{activeSection.toUpperCase()}"</span> memerlukan otorisasi tingkat tinggi (Owner / Manager). Silakan ubah switch "Role Emulasi" di atas untuk mensimulasikan otorisasi lain.
+                Modul <span className="font-bold text-amber-100">"{activeSection.toUpperCase()}"</span> memerlukan otorisasi tingkat tinggi (Owner / Manager). Silakan login atau hubungi administrator dengan hak akses Owner/Manager.
               </p>
             </div>
 
@@ -3648,17 +3612,6 @@ export default function CashierPosCenter({
                 </li>
               </ul>
             </div>
-
-            <button
-              onClick={() => {
-                setActiveRole("Owner");
-                inform("👑 Emulasi Role dinaikkan ke tingkat Owner secara otomatis!");
-                writeAuditLog(`Auto privilege bypass triggered: Switched role to Owner`);
-              }}
-              className="bg-[#D4A853] hover:bg-[#b08b3e] text-black font-bold px-6 py-2.5 rounded-xl text-xs transition duration-200 shadow-lg cursor-pointer transform hover:scale-[1.03]"
-            >
-              Ubah ke Emulator Owner 👑 (Full Access)
-            </button>
           </motion.div>
         )}
       </AnimatePresence>
