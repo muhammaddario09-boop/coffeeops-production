@@ -149,6 +149,7 @@ export default function App() {
       deviceSessions: updatedSessions
     };
     nextState.activities = addActivity("🔑", `Staf ${user.name} (${user.role}) login ke sistem`, "info");
+    logActivityGlobal(nextState, "LOGIN", `Staf ${user.name} (${user.role}) login ke sistem`, user.name);
     
     const newAudit = {
       id: "AUD-" + Date.now().toString().slice(-4),
@@ -192,6 +193,7 @@ export default function App() {
 
     if (userBeforeLogout) {
       nextState.activities = addActivity("🚪", `Staf ${userBeforeLogout.name} (${userBeforeLogout.role}) logout dari sistem`, "info");
+      logActivityGlobal(nextState, "LOGOUT", `Staf ${userBeforeLogout.name} (${userBeforeLogout.role}) logout dari sistem`, userBeforeLogout.name);
       
       const newAudit = {
         id: "AUD-" + Date.now().toString().slice(-4),
@@ -216,6 +218,14 @@ export default function App() {
 
     const timeStr = new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
     const dateStr = new Date().toISOString().split("T")[0];
+
+    const alreadyClockedIn = (nextState.attendance || []).some(
+      (a) => a.userId === userId && a.date === dateStr
+    );
+    if (alreadyClockedIn) {
+      triggerToast("Gagal: Anda sudah melakukan absen masuk hari ini!");
+      return;
+    }
 
     let status: "Hadir" | "Terlambat" = "Hadir";
     const [hours, minutes] = timeStr.split(":").map(Number);
@@ -261,6 +271,7 @@ export default function App() {
     nextState.attendance = nextState.attendance || [];
     nextState.attendance.push(newLog);
     nextState.activities = addActivity("📋", `Staff ${userForClock.name} melakukan Absen Masuk (${shift}) - Status: ${status}`, "info");
+    logActivityGlobal(nextState, "CLOCK_IN", `Staff ${userForClock.name} melakukan Absen Masuk (${shift}) - Status: ${status}`, userForClock.name);
 
     syncStateWithServer(nextState);
     triggerToast(`✓ Absen Masuk Berhasil! Selamat bertugas, ${userForClock.name}.`);
@@ -293,6 +304,7 @@ export default function App() {
     };
 
     nextState.activities = addActivity("🚪", `Staff ${log.userName} melakukan Absen Keluar (Selesai Shift), Total kerja: ${hoursWorked} jam`, "info");
+    logActivityGlobal(nextState, "CLOCK_OUT", `Staff ${log.userName} melakukan Absen Keluar (Selesai Shift), Total kerja: ${hoursWorked} jam`, log.userName);
 
     syncStateWithServer(nextState);
     triggerToast(`✓ Absen Keluar Berhasil! Terima kasih atas kerjamu hari ini, ${log.userName}.`);
@@ -309,67 +321,131 @@ export default function App() {
     triggerToast("Catatan absensi dihapus.");
   };
 
-  const handleAddUser = (newUser: Omit<User, "id">) => {
-    const nextState = { ...state };
-    const userList = nextState.users || [];
-    const id = "u" + (userList.length + 1).toString();
+  const handleAddUser = async (newUser: Omit<User, "id">) => {
+    const id = "u-" + Math.floor(Math.random() * 1000000);
     const userObj: User = {
       id,
       ...newUser
     };
-    nextState.users = [...userList, userObj];
-    nextState.activities = addActivity("👤", `Mendaftarkan karyawan baru: ${newUser.name} (${newUser.role})`, "info");
 
-    syncStateWithServer(nextState);
-    triggerToast(`✓ Karyawan ${newUser.name} berhasil didaftarkan.`);
+    const nextState = { ...state };
+    nextState.users = [...(nextState.users || []), userObj];
+    nextState.activities = addActivity("👤", `Mendaftarkan karyawan baru: ${newUser.name} (${newUser.role})`, "info");
+    logActivityGlobal(nextState, "CREATE_EMPLOYEE", `Mendaftarkan karyawan baru: ${newUser.name} (${newUser.role})`, newUser.name);
+    setState(nextState);
+
+    try {
+      const response = await fetch(getServerUrl("/api/employees"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(userObj)
+      });
+      if (response.ok) {
+        triggerToast(`✓ Karyawan ${newUser.name} berhasil didaftarkan.`);
+        await fetchStateFromServer(true);
+      } else {
+        triggerToast("Gagal menyimpan ke database cloud, menggunakan memori lokal.");
+        syncStateWithServer(nextState);
+      }
+    } catch (err) {
+      console.error("Failed to post user:", err);
+      syncStateWithServer(nextState);
+    }
   };
 
-  const handleUpdateUserPin = (id: string, newPin: string) => {
+  const handleUpdateUserPin = async (id: string, newPin: string) => {
     const nextState = { ...state };
     if (!nextState.users) return;
     const userIdx = nextState.users.findIndex((u) => u.id === id);
     if (userIdx !== -1) {
-      nextState.users[userIdx].pin = newPin;
-      nextState.activities = addActivity("⚙️", `Memperbarui PIN login keamananan staf ${nextState.users[userIdx].name}`, "info");
+      const updatedUser = { ...nextState.users[userIdx], pin: newPin };
+      nextState.users[userIdx] = updatedUser;
+      nextState.activities = addActivity("⚙️", `Memperbarui PIN login keamananan staf ${updatedUser.name}`, "info");
+      setState(nextState);
 
-      syncStateWithServer(nextState);
-      triggerToast("✓ PIN staf berhasil diubah.");
+      try {
+        const response = await fetch(getServerUrl(`/api/employees/${id}`), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(updatedUser)
+        });
+        if (response.ok) {
+          triggerToast("✓ PIN staf berhasil diubah.");
+          await fetchStateFromServer(true);
+        } else {
+          syncStateWithServer(nextState);
+        }
+      } catch (err) {
+        console.error("Failed to update PIN:", err);
+        syncStateWithServer(nextState);
+      }
     }
   };
 
-  const handleUpdateUser = (updatedUser: User) => {
+  const handleUpdateUser = async (updatedUser: User) => {
     const nextState = { ...state };
     if (!nextState.users) return;
     const userIdx = nextState.users.findIndex((u) => u.id === updatedUser.id);
     if (userIdx !== -1) {
-      nextState.users[userIdx] = {
+      const liveUser = {
         ...nextState.users[userIdx],
         ...updatedUser,
         updatedAt: new Date().toISOString()
       };
+      nextState.users[userIdx] = liveUser;
       nextState.activities = addActivity("⚙️", `Memperbarui informasi karyawan ${updatedUser.name} (${updatedUser.role})`, "info");
+      logActivityGlobal(nextState, "UPDATE_EMPLOYEE", `Memperbarui informasi karyawan ${updatedUser.name} (${updatedUser.role})`, updatedUser.name);
 
-      // Update current session if the edited user is the logged in user
       if (currentUser && currentUser.id === updatedUser.id) {
-        const liveUser = nextState.users[userIdx];
         setCurrentUser(liveUser);
         localStorage.setItem("coffeeops_currentUser", JSON.stringify(liveUser));
       }
+      setState(nextState);
 
-      syncStateWithServer(nextState);
-      triggerToast("✓ Data karyawan berhasil diperbarui.");
+      try {
+        const response = await fetch(getServerUrl(`/api/employees/${updatedUser.id}`), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(liveUser)
+        });
+        if (response.ok) {
+          triggerToast("✓ Data karyawan berhasil diperbarui.");
+          await fetchStateFromServer(true);
+        } else {
+          syncStateWithServer(nextState);
+        }
+      } catch (err) {
+        console.error("Failed to update user:", err);
+        syncStateWithServer(nextState);
+      }
     }
   };
 
-  const handleDeleteUser = (id: string) => {
+  const handleDeleteUser = async (id: string) => {
     const nextState = { ...state };
     if (!nextState.users) return;
     const user = nextState.users.find((u) => u.id === id);
     nextState.users = nextState.users.filter((u) => u.id !== id);
     nextState.activities = addActivity("⚙️", `Menghapus akun kru: ${user?.name || "Staf"}`, "info");
+    if (user) {
+      logActivityGlobal(nextState, "DELETE_EMPLOYEE", `Menghapus akun kru: ${user.name} (${user.role})`, user.name);
+    }
+    setState(nextState);
 
-    syncStateWithServer(nextState);
-    triggerToast("Akun kru berhasil dihapus.");
+    try {
+      const response = await fetch(getServerUrl(`/api/employees/${id}`), {
+        method: "DELETE"
+      });
+      if (response.ok) {
+        triggerToast("Akun kru berhasil dihapus.");
+        await fetchStateFromServer(true);
+      } else {
+        syncStateWithServer(nextState);
+      }
+    } catch (err) {
+      console.error("Failed to delete user:", err);
+      syncStateWithServer(nextState);
+    }
   };
 
   // Modals state
@@ -493,7 +569,7 @@ export default function App() {
         const serverState = await response.json();
         let mergedState: CoffeeOpsState = {
           ...serverState,
-          users: serverState.users && serverState.users.length > 0 ? serverState.users : initialStats.users,
+          users: serverState.users || [],
           suppliers: serverState.suppliers || initialStats.suppliers,
           supplierMapping: serverState.supplierMapping || initialStats.supplierMapping,
           pos: serverState.pos || initialStats.pos,
@@ -720,6 +796,46 @@ export default function App() {
     return nextActs;
   };
 
+  const logStockMovement = (
+    nextState: CoffeeOpsState,
+    itemId: string,
+    type: "IN" | "OUT" | "ADJUST",
+    quantity: number,
+    beforeStock: number,
+    afterStock: number,
+    reason: string,
+    createdBy?: string
+  ) => {
+    const newMovement = {
+      id: "SM-" + Date.now().toString() + "-" + Math.random().toString(36).substring(2, 6),
+      item_id: itemId,
+      type,
+      quantity,
+      before_stock: beforeStock,
+      after_stock: afterStock,
+      reason,
+      created_by: createdBy || currentUser?.name || "System",
+      created_at: new Date().toISOString()
+    };
+    nextState.stockMovements = [newMovement, ...(nextState.stockMovements || [])];
+  };
+
+  const logActivityGlobal = (
+    nextState: CoffeeOpsState,
+    action: "LOGIN" | "LOGOUT" | "CREATE_EMPLOYEE" | "UPDATE_EMPLOYEE" | "DELETE_EMPLOYEE" | "ADD_STOCK" | "REMOVE_STOCK" | "CREATE_SALE" | "CLOCK_IN" | "CLOCK_OUT",
+    description: string,
+    userId?: string
+  ) => {
+    const newGlobalLog = {
+      id: "GL-" + Date.now().toString() + "-" + Math.random().toString(36).substring(2, 6),
+      user_id: userId || currentUser?.name || "System",
+      action,
+      description,
+      created_at: new Date().toISOString()
+    };
+    nextState.activityLogsGlobal = [newGlobalLog, ...(nextState.activityLogsGlobal || [])];
+  };
+
   // ── MODAL OPERATIONAL HANDLERS ──
   
   // Submit Issue
@@ -740,6 +856,19 @@ export default function App() {
       ...prevInv,
       keluar: prevInv.keluar + issueForm.qty
     };
+
+    const beforeStock = Math.max(0, prevInv.awal + prevInv.masuk - prevInv.keluar - prevInv.waste);
+    const afterStock = Math.max(0, beforeStock - issueForm.qty);
+    logStockMovement(
+      nextState,
+      issueForm.code,
+      "OUT",
+      issueForm.qty,
+      beforeStock,
+      afterStock,
+      `Pemakaian: ${issueForm.cat} (${issueForm.note || "Tanpa catatan"})`,
+      issueForm.by || "Staff Barista"
+    );
 
     // adjust storage levels based on item location
     if (m.loc === "gudang") {
@@ -815,6 +944,7 @@ export default function App() {
       
       nextState.issues = [newIssue, ...(nextState.issues || [])];
       nextState.activities = addActivity("📤", `Pemakaian ${issueForm.qty} ${m.unit} ${m.name} oleh ${issueForm.by || "Staff"} (Stok Berkurang)`, "out");
+      logActivityGlobal(nextState, "REMOVE_STOCK", `Pemakaian ${issueForm.qty} ${m.unit} ${m.name} oleh ${issueForm.by || "Staff"}`, issueForm.by || "Staff");
       triggerToast(`✓ Pemakaian ${issueForm.qty} ${m.unit} ${m.name} disimpan.`);
     }
 
@@ -849,8 +979,22 @@ export default function App() {
           keluar: Math.max(0, prevInv.keluar - target.qty)
         };
 
+        const beforeStock = Math.max(0, prevInv.awal + prevInv.masuk - prevInv.keluar - prevInv.waste);
+        const afterStock = beforeStock + target.qty;
+        logStockMovement(
+          nextState,
+          target.code,
+          "IN",
+          target.qty,
+          beforeStock,
+          afterStock,
+          `Hapus Catatan Pemakaian: Stok dikembalikan`,
+          currentUser?.name || "System"
+        );
+
         nextState.issues.splice(index, 1);
         nextState.activities = addActivity("📤", `Menghapus catatan pemakaian bahan ${target.name} (Stok Dikembalikan)`, "info");
+        logActivityGlobal(nextState, "ADD_STOCK", `Hapus catatan pemakaian bahan ${target.name} (Stok dikembalikan: ${target.qty} ${target.unit})`);
 
         syncStateWithServer(nextState);
         setConfirmContext(null);
@@ -877,6 +1021,19 @@ export default function App() {
       ...prevInv,
       waste: prevInv.waste + wasteForm.qty
     };
+
+    const beforeStock = Math.max(0, prevInv.awal + prevInv.masuk - prevInv.keluar - prevInv.waste);
+    const afterStock = Math.max(0, beforeStock - wasteForm.qty);
+    logStockMovement(
+      nextState,
+      wasteForm.code,
+      "OUT",
+      wasteForm.qty,
+      beforeStock,
+      afterStock,
+      `Waste: ${wasteForm.cause} — Tindakan: ${wasteForm.action || "Tidak ada"}`,
+      wasteForm.by || "Supervisor"
+    );
 
     // Deduct from storage based on item location
     if (m.loc === "gudang") {
@@ -949,6 +1106,7 @@ export default function App() {
 
       nextState.wastes = [newWaste, ...(nextState.wastes || [])];
       nextState.activities = addActivity("🗑", `Mencatat waste ${m.name} sebanyak ${wasteForm.qty} ${m.unit} — ${wasteForm.cause} (Stok Berkurang)`, "waste");
+      logActivityGlobal(nextState, "REMOVE_STOCK", `Mencatat waste ${m.name} sebanyak ${wasteForm.qty} ${m.unit} - Kerugian: Rp ${estLoss.toLocaleString("id-ID")}`, wasteForm.by || "Supervisor");
       triggerToast(`✓ Waste ${m.name} sebanyak ${wasteForm.qty} ${m.unit} dicatatkan & stok berkurang.`);
     }
 
@@ -970,6 +1128,19 @@ export default function App() {
           waste: Math.max(0, prevInv.waste - target.qty)
         };
 
+        const beforeStock = Math.max(0, prevInv.awal + prevInv.masuk - prevInv.keluar - prevInv.waste);
+        const afterStock = beforeStock + target.qty;
+        logStockMovement(
+          nextState,
+          target.code,
+          "IN",
+          target.qty,
+          beforeStock,
+          afterStock,
+          `Hapus Catatan Waste: Stok dikembalikan`,
+          currentUser?.name || "System"
+        );
+
         // restore storage based on item location
         const m = state.master.find(x => x.code === target.code);
         if (m) {
@@ -982,6 +1153,7 @@ export default function App() {
 
         nextState.wastes.splice(index, 1);
         nextState.activities = addActivity("🗑", `Hapus pencatatan waste ${target.name} (Stok Dikembalikan)`, "info");
+        logActivityGlobal(nextState, "ADD_STOCK", `Hapus pencatatan waste ${target.name} (Stok Dikembalikan: ${target.qty} ${target.unit})`);
 
         syncStateWithServer(nextState);
         setConfirmContext(null);
@@ -1017,6 +1189,19 @@ export default function App() {
         ...prevInv,
         masuk: prevInv.masuk + row.qty
       };
+
+      const beforeStock = Math.max(0, prevInv.awal + prevInv.masuk - prevInv.keluar - prevInv.waste);
+      const afterStock = beforeStock + row.qty;
+      logStockMovement(
+        nextState,
+        row.code,
+        "IN",
+        row.qty,
+        beforeStock,
+        afterStock,
+        `Penerimaan GRN Supplier: ${grnMeta.supplier}`,
+        grnMeta.by || "Staff Receiving"
+      );
 
       // Add to physical location storage
       if (grnMeta.dest === "gudang" || grnMeta.dest === "both") {
@@ -1063,6 +1248,7 @@ export default function App() {
 
     nextState.grns = [newGRNDoc, ...(nextState.grns || [])];
     nextState.activities = addActivity("📥", `Menerima Supply dari ${grnMeta.supplier} - ${itemsRow.length} item berhasil disimpan`, "in");
+    logActivityGlobal(nextState, "ADD_STOCK", `Menerima Supply dari ${grnMeta.supplier} - No: ${newGRNDoc.no} (${itemsRow.length} item)`, grnMeta.by || "Staff Receiving");
 
     syncStateWithServer(nextState);
     setActiveModal(null);
@@ -1084,6 +1270,19 @@ export default function App() {
             masuk: Math.max(0, prevInv.masuk - it.qty)
           };
 
+          const beforeStock = Math.max(0, prevInv.awal + prevInv.masuk - prevInv.keluar - prevInv.waste);
+          const afterStock = Math.max(0, beforeStock - it.qty);
+          logStockMovement(
+            nextState,
+            it.code,
+            "OUT",
+            it.qty,
+            beforeStock,
+            afterStock,
+            `Hapus / Batal Laporan GRN: ${grn.no}`,
+            currentUser?.name || "System"
+          );
+
           if (grn.dest === "gudang" || grn.dest === "both") {
             const deduction = grn.dest === "both" ? it.qty / 2 : it.qty;
             const currentGudang = nextState.storage.gudang[it.code] || 0;
@@ -1103,6 +1302,7 @@ export default function App() {
 
         nextState.grns.splice(index, 1);
         nextState.activities = addActivity("📥", `Membatalkan penerimaan GRN ${grn.no}`, "info");
+        logActivityGlobal(nextState, "REMOVE_STOCK", `Membatalkan penerimaan GRN No: ${grn.no} (${grn.items.length} jenis item)`);
 
         syncStateWithServer(nextState);
         setConfirmContext(null);
@@ -1234,6 +1434,9 @@ export default function App() {
     Object.entries(opnameQuantities).forEach(([code, rawVal]) => {
       const value = Number(rawVal) || 0;
       const prev = nextState.inventory[code] || { awal: 0, masuk: 0, keluar: 0, waste: 0 };
+      const prevStock = Math.max(0, prev.awal + prev.masuk - prev.keluar - prev.waste);
+      const diff = value - prevStock;
+
       nextState.inventory[code] = {
         awal: value,
         masuk: 0,
@@ -1254,10 +1457,24 @@ export default function App() {
           nextState.storage.gudang[code] = Math.ceil(value * 0.6);
           nextState.storage.bar[code] = Math.floor(value * 0.4);
         }
+
+        if (diff !== 0) {
+          logStockMovement(
+            nextState,
+            code,
+            "ADJUST",
+            Math.abs(diff),
+            prevStock,
+            value,
+            `Stock Opname: ${diff > 0 ? "+" : ""}${diff} ${m.unit}`,
+            opnameBy || "Staff"
+          );
+        }
       }
     });
 
     nextState.activities = addActivity("📋", `Staff ${opnameBy || "Staff"} merubah catatan Stock Opname harian`, "in");
+    logActivityGlobal(nextState, "ADD_STOCK", `Staff ${opnameBy || "Staff"} merubah catatan Stock Opname harian`);
 
     syncStateWithServer(nextState);
     setActiveModal(null);

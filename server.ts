@@ -10,7 +10,7 @@ import nodemailer from "nodemailer";
 import { GoogleGenAI } from "@google/genai";
 import midtransClient from "midtrans-client";
 import { initialStats } from "./src/data.js";
-import { CoffeeOpsState } from "./src/types.js";
+import { CoffeeOpsState, User } from "./src/types.js";
 import { createClient } from "@supabase/supabase-js";
 
 let resolvedFilename = "";
@@ -146,7 +146,7 @@ function mergeLoadedState(loaded: Partial<CoffeeOpsState>): CoffeeOpsState {
   const merged: CoffeeOpsState = {
     ...initialStats,
     ...loaded,
-    users: loaded.users && loaded.users.length ? loaded.users : initialStats.users,
+    users: loaded.users || [],
     fohChecklists: loaded.fohChecklists || initialStats.fohChecklists,
     fohFeedback: loaded.fohFeedback || initialStats.fohFeedback,
     fohComplaints: loaded.fohComplaints || initialStats.fohComplaints,
@@ -173,11 +173,51 @@ function mergeLoadedState(loaded: Partial<CoffeeOpsState>): CoffeeOpsState {
     employeeKpis: loaded.employeeKpis || [],
     customerFeedbacks: loaded.customerFeedbacks || [],
     incidentReports: loaded.incidentReports || [],
+    attendance: loaded.attendance || initialStats.attendance || [],
+    sales: loaded.sales || [],
+    recipes: loaded.recipes || [],
+    homemadeIngredients: loaded.homemadeIngredients || [],
+    stockMovements: loaded.stockMovements || [],
+    activityLogsGlobal: loaded.activityLogsGlobal || [],
     kdsQueue: loaded.kdsQueue || initialStats.kdsQueue
   };
 
   performEmployeeMapping(merged);
   return merged;
+}
+
+function mapDbEmployeeToUser(emp: any): User {
+  return {
+    id: emp.id || emp.employee_id || `u-${emp.staff_code || emp.employee_code}`,
+    name: emp.name || emp.full_name || emp.fullName || "Unnamed",
+    role: emp.role || "Barista",
+    pin: emp.pin || "0000",
+    staffCode: emp.staffCode || emp.staff_code || emp.employee_code || emp.employeeCode || `STF-${emp.id}`,
+    email: emp.email || "",
+    whatsappNumber: emp.whatsappNumber || emp.whatsapp_number || emp.phone || "",
+    branchId: emp.branchId || emp.branch_id || "Pusat Pangkalpinang (HQ)",
+    password: emp.password || undefined,
+    isActive: emp.isActive ?? emp.is_active ?? true,
+    createdAt: emp.createdAt || emp.created_at || new Date().toISOString(),
+    profilePhoto: emp.profilePhoto || emp.profile_photo || undefined,
+    updatedAt: emp.updatedAt || emp.updated_at || undefined
+  };
+}
+
+function mapDbEmployeeToFohEmployee(emp: any): any {
+  const userId = emp.id || emp.employee_id || `u-${emp.staff_code || emp.employee_code}`;
+  return {
+    id: emp.emp_id || emp.foh_id || `emp-${userId}`,
+    userId: userId,
+    branchId: emp.branchId || emp.branch_id || "Pusat Pangkalpinang (HQ)",
+    employeeCode: emp.staffCode || emp.staff_code || emp.employee_code || emp.employeeCode || "STF-C",
+    fullName: emp.name || emp.full_name || emp.fullName || "Unnamed",
+    gender: emp.gender || "Pria",
+    phone: emp.whatsappNumber || emp.whatsapp_number || emp.phone || "0",
+    email: emp.email || "staff@coffeeops.com",
+    isActive: emp.isActive ?? emp.is_active ?? true,
+    createdAt: emp.createdAt || emp.created_at || new Date().toISOString()
+  };
 }
 
 // Fetch State dynamically from Supabase
@@ -194,8 +234,9 @@ async function loadStateFromSupabase(): Promise<CoffeeOpsState | null> {
       throw error;
     }
 
+    let loadedState: CoffeeOpsState | null = null;
     if (data && data.state) {
-      return mergeLoadedState(data.state as CoffeeOpsState);
+      loadedState = mergeLoadedState(data.state as CoffeeOpsState);
     } else {
       // Row not found, create initial default row in Supabase
       console.log("[Supabase] No global state found in cloud database. Initializing table...");
@@ -206,8 +247,54 @@ async function loadStateFromSupabase(): Promise<CoffeeOpsState | null> {
       if (insertError) {
         console.error("[Supabase] Failed to write initial state row:", insertError);
       }
-      return localState;
+      loadedState = localState;
     }
+
+    // Direct employees lookup table query (making it the single source of truth)
+    if (loadedState) {
+      try {
+        const { data: dbEmployees, error: employeesError } = await (supabase as any)
+          .from("employees")
+          .select("*");
+        
+        if (!employeesError && dbEmployees) {
+          if (dbEmployees.length > 0) {
+            console.log(`[Supabase] Loaded ${dbEmployees.length} employees directly from 'employees' table.`);
+            loadedState.users = dbEmployees.map(mapDbEmployeeToUser);
+            loadedState.employees = dbEmployees.map(mapDbEmployeeToFohEmployee);
+          } else {
+            // Employees table is empty. It could be a new database.
+            // Let's seed the initial default users into the table.
+            console.log("[Supabase] 'employees' table is empty. Auto-seeding initial default users...");
+            const seedPayloads = await Promise.all(initialStats.users.map(u => buildSafeEmployeePayload(u)));
+            const { error: seedError } = await (supabase as any)
+              .from("employees")
+              .insert(seedPayloads);
+            if (!seedError) {
+              console.log("[Supabase] Successfully seeded initial users to 'employees' table.");
+              // Reload
+              const { data: freshEmployees, error: freshErr } = await (supabase as any)
+                .from("employees")
+                .select("*");
+              if (!freshErr && freshEmployees) {
+                loadedState.users = freshEmployees.map(mapDbEmployeeToUser);
+                loadedState.employees = freshEmployees.map(mapDbEmployeeToFohEmployee);
+              }
+            } else {
+              console.error("[Supabase] Failed to seed table:", seedError);
+              loadedState.users = [];
+              loadedState.employees = [];
+            }
+          }
+        } else if (employeesError) {
+          console.warn("[Supabase] Warning reading employees table (will fallback to empty or monolithic state):", employeesError.message || employeesError);
+        }
+      } catch (dbErr: any) {
+        console.warn("[Supabase] Direct employees lookup table query failed (skipping map):", dbErr.message || dbErr);
+      }
+    }
+
+    return loadedState;
   } catch (err: any) {
     console.error("[Supabase] Error loading metadata from Postgres:", err.message || err);
   }
@@ -329,6 +416,184 @@ app.post("/api/state", async (req, res) => {
   }
   await saveState(newState);
   res.json({ status: "success", message: "Database updated successfully across all online devices" });
+});
+
+async function buildSafeEmployeePayload(data: any): Promise<any> {
+  const payload: any = {};
+  const standardCols: any = {
+    id: data.id,
+    name: data.name,
+    full_name: data.name,
+    fullName: data.name,
+    role: data.role || "Barista",
+    pin: data.pin || "0000",
+    staff_code: data.staffCode || data.employeeCode,
+    staffCode: data.staffCode || data.employeeCode,
+    employee_code: data.staffCode || data.employeeCode,
+    employeeCode: data.staffCode || data.employeeCode,
+    email: data.email || "",
+    whatsapp_number: data.whatsappNumber || data.phone || "",
+    whatsappNumber: data.whatsappNumber || data.phone || "",
+    phone: data.whatsappNumber || data.phone || "",
+    branch_id: data.branchId || "Pusat Pangkalpinang (HQ)",
+    branchId: data.branchId || "Pusat Pangkalpinang (HQ)",
+    password: data.password || "",
+    is_active: data.isActive ?? true,
+    isActive: data.isActive ?? true,
+    profile_photo: data.profilePhoto || "",
+    profilePhoto: data.profilePhoto || "",
+    created_at: data.createdAt || new Date().toISOString(),
+    createdAt: data.createdAt || new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  if (!supabase) {
+    return standardCols;
+  }
+
+  try {
+    const { data: testRows } = await (supabase as any).from("employees").select("*").limit(1);
+    if (testRows && testRows.length > 0) {
+      const dbCols = Object.keys(testRows[0]);
+      dbCols.forEach((col: string) => {
+        if (standardCols[col] !== undefined) {
+          payload[col] = standardCols[col];
+        }
+      });
+      return payload;
+    }
+  } catch (err) {
+    console.warn("[Supabase] Could not query table structure for employees, using snake_case fallback:", err);
+  }
+
+  return {
+    id: data.id,
+    name: data.name,
+    role: data.role || "Barista",
+    pin: data.pin || "0050",
+    email: data.email || "",
+    phone: data.whatsappNumber || data.phone || "",
+    is_active: data.isActive ?? true,
+    staff_code: data.staffCode || data.employeeCode || `STF-${data.id}`,
+    branch_id: data.branchId || "Pusat Pangkalpinang (HQ)"
+  };
+}
+
+app.get("/api/employees", (req, res) => {
+  const state = loadState();
+  res.json(state.users || []);
+});
+
+app.post("/api/employees", async (req, res) => {
+  const empInput = req.body;
+  if (!empInput || !empInput.id || !empInput.name) {
+    return res.status(400).json({ error: "Missing required employee field 'id' or 'name'" });
+  }
+
+  const payload = await buildSafeEmployeePayload(empInput);
+  let dbResult: any = null;
+
+  if (supabase) {
+    try {
+      const { data, error, status, statusText } = await (supabase as any)
+        .from("employees")
+        .insert([payload])
+        .select();
+
+      dbResult = { data, error, status, statusText };
+    } catch (err: any) {
+      dbResult = { error: err.message || err };
+    }
+  } else {
+    dbResult = { info: "Local-only mode, no active Supabase integration" };
+  }
+
+  // REQUIRED LOGS FORMAT (3)
+  console.log(`\nINSERT employee:\n${JSON.stringify(payload, null, 2)}\n\nResponse:\n${JSON.stringify(dbResult, null, 2)}\n`);
+
+  // Update backend monolithic state
+  const state = loadState();
+  const currentUsers = state.users || [];
+  const exists = currentUsers.some(u => u.id === empInput.id);
+  if (!exists) {
+    state.users = [...currentUsers, empInput];
+  } else {
+    state.users = currentUsers.map(u => u.id === empInput.id ? empInput : u);
+  }
+  performEmployeeMapping(state);
+  await saveState(state);
+
+  res.json({ status: "success", result: dbResult, employee: empInput });
+});
+
+app.put("/api/employees/:id", async (req, res) => {
+  const { id } = req.params;
+  const empInput = req.body;
+  if (!empInput) {
+    return res.status(400).json({ error: "Missing body" });
+  }
+
+  const payload = await buildSafeEmployeePayload({ ...empInput, id });
+  let dbResult: any = null;
+
+  if (supabase) {
+    try {
+      const { data, error, status, statusText } = await (supabase as any)
+        .from("employees")
+        .update(payload)
+        .eq("id", id)
+        .select();
+
+      dbResult = { data, error, status, statusText };
+    } catch (err: any) {
+      dbResult = { error: err.message || err };
+    }
+  } else {
+    dbResult = { info: "Local-only mode, no active Supabase integration" };
+  }
+
+  // REQUIRED LOGS FORMAT (3)
+  console.log(`\nUPDATE employee:\n${id}\n\nResponse:\n${JSON.stringify(dbResult, null, 2)}\n`);
+
+  // Update backend monolithic state
+  const state = loadState();
+  state.users = (state.users || []).map(u => u.id === id ? { ...u, ...empInput } : u);
+  performEmployeeMapping(state);
+  await saveState(state);
+
+  res.json({ status: "success", result: dbResult, employee: empInput });
+});
+
+app.delete("/api/employees/:id", async (req, res) => {
+  const { id } = req.params;
+  let dbResult: any = null;
+
+  if (supabase) {
+    try {
+      const { error, status, statusText } = await (supabase as any)
+        .from("employees")
+        .delete()
+        .eq("id", id);
+
+      dbResult = { error, status, statusText };
+    } catch (err: any) {
+      dbResult = { error: err.message || err };
+    }
+  } else {
+    dbResult = { info: "Local-only mode, no active Supabase integration" };
+  }
+
+  // REQUIRED LOGS FORMAT (3)
+  console.log(`\nDELETE employee id:\n${id}\n\nResponse Supabase:\n${JSON.stringify(dbResult, null, 2)}\n`);
+
+  // Update backend monolithic state
+  const state = loadState();
+  state.users = (state.users || []).filter(u => u.id !== id);
+  performEmployeeMapping(state);
+  await saveState(state);
+
+  res.json({ status: "success", result: dbResult });
 });
 
 app.get(["/api/download-stored-report/:period", "/download-stored-report/:period"], (req, res) => {

@@ -9,7 +9,7 @@ interface CogsProps {
 }
 
 export default function CogsManagement({ state, currentUser, syncState, triggerToast }: CogsProps) {
-  const { master, inventory, storage, wastes, users = [] } = state;
+  const { master, inventory, storage, wastes, users = [], stockMovements = [], activityLogsGlobal = [] } = state;
   const userRole = currentUser?.role || "Barista";
   const isAuthorized = userRole === "Owner" || userRole === "Manager";
 
@@ -602,6 +602,8 @@ export default function CogsManagement({ state, currentUser, syncState, triggerT
       second: "2-digit"
     }).replace(/\./g, ":");
 
+    const tempStockMovements = nextState.stockMovements || [];
+
     // 2. Perform automated deduction & detailed logging
     recipe.ingredients.forEach(ing => {
       const requiredQty = ing.qty * simSaleQty;
@@ -615,8 +617,26 @@ export default function CogsManagement({ state, currentUser, syncState, triggerT
       if (!nextState.inventory[ing.code]) {
         nextState.inventory[ing.code] = { awal: 0, masuk: 0, keluar: 0, waste: 0 };
       }
-      const prevKeluar = nextState.inventory[ing.code].keluar || 0;
+      const prevInv = nextState.inventory[ing.code];
+      const prevKeluar = prevInv.keluar || 0;
       nextState.inventory[ing.code].keluar = parseFloat((prevKeluar + requiredQty).toFixed(4));
+
+      const beforeStock = Math.max(0, prevInv.awal + prevInv.masuk - prevInv.keluar - prevInv.waste);
+      const afterStock = Math.max(0, beforeStock - requiredQty);
+
+      // Record Stock Movement log entry
+      const newMovement = {
+        id: "SM-" + Date.now().toString() + "-" + Math.random().toString(36).substring(2, 6),
+        item_id: ing.code,
+        type: "OUT" as const,
+        quantity: requiredQty,
+        before_stock: beforeStock,
+        after_stock: afterStock,
+        reason: `Deduction penjualan menu: ${simSaleQty}x ${recipe.name}`,
+        created_by: simSaleBy || "System",
+        created_at: new Date().toISOString()
+      };
+      tempStockMovements.unshift(newMovement);
 
       // Create an audit issue log for tracking
       const newIssue: IssueItem = {
@@ -635,6 +655,8 @@ export default function CogsManagement({ state, currentUser, syncState, triggerT
       nextState.issues.push(newIssue);
     });
 
+    nextState.stockMovements = tempStockMovements;
+
     // 3. Register financial sale transaction
     const totalRecipeCost = calculateRecipeTotalCost(recipe);
     const revenueVal = recipe.sellPrice * simSaleQty;
@@ -652,6 +674,18 @@ export default function CogsManagement({ state, currentUser, syncState, triggerT
       by: simSaleBy
     };
     nextState.sales = [newSale, ...nextState.sales];
+
+    // Create the global activity log
+    const tempGlobalLogs = nextState.activityLogsGlobal || [];
+    const newGlobalLog = {
+      id: "GL-" + Date.now().toString() + "-" + Math.random().toString(36).substring(2, 6),
+      user_id: simSaleBy || "System",
+      action: "CREATE_SALE" as const,
+      description: `Penjualan ${simSaleQty}x ${recipe.name}. Pendapatan: Rp ${revenueVal.toLocaleString("id-ID")} | HPP Pokok: Rp ${costVal.toLocaleString("id-ID")}`,
+      created_at: new Date().toISOString()
+    };
+    tempGlobalLogs.unshift(newGlobalLog);
+    nextState.activityLogsGlobal = tempGlobalLogs;
 
     //4. Log overall System Activity log
     const activity: ActivityLog = {
@@ -1794,6 +1828,85 @@ export default function CogsManagement({ state, currentUser, syncState, triggerT
                   })}
                 </tbody>
               </table>
+            </div>
+          </div>
+
+          {/* New Panel: Audit Logs & Stock Movements */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+            {/* Audit Logs */}
+            <div className="bg-[#1a0a00]/40 border border-[#D4A853]/15 rounded-2xl p-5 space-y-4">
+              <div>
+                <h3 className="font-serif font-bold text-sm text-amber-300">📋 Log Audit Aktivitas Global</h3>
+                <p className="text-[11px] text-amber-200/40 mt-1">
+                  Catatan kronologis aktivitas operasional (Login, Logout, CRUD Employee, Penjualan, Absensi, dll).
+                </p>
+              </div>
+              <div className="bg-black/30 rounded-xl border border-[#D4A853]/10 max-h-[350px] overflow-y-auto divide-y divide-[#D4A853]/5 font-mono text-xs">
+                {activityLogsGlobal.length === 0 ? (
+                  <div className="p-4 text-center text-amber-200/20 italic">Belum ada log aktivitas global yang dicatat.</div>
+                ) : (
+                  activityLogsGlobal.map((log) => (
+                    <div key={log.id} className="p-3 hover:bg-amber-500/5 transition space-y-1">
+                      <div className="flex justify-between items-center">
+                        <span className="px-1.5 py-0.5 bg-amber-500/10 text-amber-300 rounded text-[10px] font-bold">
+                          {log.action}
+                        </span>
+                        <span className="text-[10px] text-amber-200/40">
+                          {new Date(log.created_at).toLocaleString("id-ID")}
+                        </span>
+                      </div>
+                      <p className="text-amber-100">{log.description}</p>
+                      <div className="text-[10px] text-amber-200/30">Oleh: {log.user_id}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Stock Movements */}
+            <div className="bg-[#1a0a00]/40 border border-[#D4A853]/15 rounded-2xl p-5 space-y-4">
+              <div>
+                <h3 className="font-serif font-bold text-sm text-amber-300">🔄 Log Histori Mutasi Stok</h3>
+                <p className="text-[11px] text-amber-200/40 mt-1">
+                  Pergerakan fisik stok bahan baku (In, Out, Adjust) dengan perbandingan volume stok Sebelum &amp; Sesudah.
+                </p>
+              </div>
+              <div className="bg-black/30 rounded-xl border border-[#D4A853]/10 max-h-[350px] overflow-y-auto divide-y divide-[#D4A853]/5 font-mono text-xs text-amber-100 font-sans">
+                {stockMovements.length === 0 ? (
+                  <div className="p-4 text-center text-amber-200/20 italic">Belum ada mutasi stok yang tercatat.</div>
+                ) : (
+                  stockMovements.map((sm) => {
+                    const material = master.find((m) => m.code === sm.item_id);
+                    const unitLabel = material?.unit || "unit";
+                    const itemLabel = material?.name || sm.item_id;
+                    const changeColor = sm.type === "IN" ? "text-emerald-400" : sm.type === "OUT" ? "text-red-400" : "text-amber-400";
+                    const prefix = sm.type === "IN" ? "+" : sm.type === "OUT" ? "-" : "~";
+
+                    return (
+                      <div key={sm.id} className="p-3 hover:bg-amber-500/5 transition space-y-1 font-sans">
+                        <div className="flex justify-between items-center font-bold">
+                          <span className="text-amber-200">{itemLabel}</span>
+                          <span className="text-[10px] text-amber-200/40 font-mono">
+                            {new Date(sm.created_at).toLocaleString("id-ID")}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center text-[11px]">
+                          <div>
+                            <span className="text-amber-200/40">Mutasi: </span>
+                            <span className={`font-bold ${changeColor}`}>{prefix}{sm.quantity} {unitLabel}</span>
+                          </div>
+                          <div>
+                            <span className="text-amber-200/40">Stok: </span>
+                            <span className="font-mono">{sm.before_stock} → {sm.after_stock}</span>
+                          </div>
+                        </div>
+                        <p className="text-xs text-amber-300/70 italic mt-1">{sm.reason}</p>
+                        <div className="text-[10px] text-amber-200/30">Diproses oleh: {sm.created_by}</div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
             </div>
           </div>
         </div>

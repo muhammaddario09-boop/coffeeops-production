@@ -305,6 +305,26 @@ export interface IncidentLogItem {
   actionTaken: string;
 }
 
+export interface StockMovement {
+  id: string;
+  item_id: string;
+  type: "IN" | "OUT" | "ADJUST";
+  quantity: number;
+  before_stock: number;
+  after_stock: number;
+  reason: string;
+  created_by: string;
+  created_at: string;
+}
+
+export interface ActivityLogGlobal {
+  id: string;
+  user_id: string;
+  action: "LOGIN" | "LOGOUT" | "CREATE_EMPLOYEE" | "UPDATE_EMPLOYEE" | "DELETE_EMPLOYEE" | "ADD_STOCK" | "REMOVE_STOCK" | "CREATE_SALE" | "CLOCK_IN" | "CLOCK_OUT";
+  description: string;
+  created_at: string;
+}
+
 export interface CoffeeOpsState {
   branding: BrandBranding;
   master: MasterItem[];
@@ -317,6 +337,8 @@ export interface CoffeeOpsState {
   prs: PrDoc[];
   transfers: TransferLog[];
   activities: ActivityLog[];
+  stockMovements?: StockMovement[];
+  activityLogsGlobal?: ActivityLogGlobal[];
   users?: User[];
   attendance?: AttendanceLog[];
   recipes?: DrinkRecipe[];
