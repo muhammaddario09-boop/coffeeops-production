@@ -220,6 +220,50 @@ function mapDbEmployeeToFohEmployee(emp: any): any {
   };
 }
 
+async function buildSafeInventoryItemPayload(data: any): Promise<any> {
+  const standardCols: any = {
+    code: data.code,
+    name: data.name,
+    unit: data.unit || "pcs",
+    par_stock: data.par || 10,
+    cost_per_unit: data.price || 0,
+    qty_awal: data.awal || 0,
+    qty_masuk: data.masuk || 0,
+    qty_keluar: data.keluar || 0,
+    qty_waste: data.waste || 0,
+    qty_gudang: data.gudang ?? 0,
+    qty_bar: data.bar ?? 0
+  };
+
+  if (!supabase) {
+    return standardCols;
+  }
+
+  try {
+    const { data: testRows } = await (supabase as any).from("inventory_items").select("*").limit(1);
+    if (testRows) {
+      const dbCols = testRows.length > 0 ? Object.keys(testRows[0]) : ["code", "name", "unit", "par_stock", "cost_per_unit"];
+      const payload: any = {};
+      dbCols.forEach((col: string) => {
+        if (standardCols[col] !== undefined) {
+          payload[col] = standardCols[col];
+        }
+      });
+      return payload;
+    }
+  } catch (err) {
+    console.warn("[Supabase] Could not query table structure for inventory_items, using snake_case:", err);
+  }
+
+  return {
+    code: data.code,
+    name: data.name,
+    unit: data.unit,
+    par_stock: data.par,
+    cost_per_unit: data.price
+  };
+}
+
 // Fetch State dynamically from Supabase
 async function loadStateFromSupabase(): Promise<CoffeeOpsState | null> {
   if (!supabase) return null;
@@ -292,6 +336,162 @@ async function loadStateFromSupabase(): Promise<CoffeeOpsState | null> {
       } catch (dbErr: any) {
         console.warn("[Supabase] Direct employees lookup table query failed (skipping map):", dbErr.message || dbErr);
       }
+
+      // INTEGRATE RELATIONAL DECOUPLING MAPPINGS ON RETRIEVAL
+      // 1. Relational Master Inventory & Quantities
+      try {
+        const { data: dbInventory, error: invError } = await (supabase as any)
+          .from("inventory_items")
+          .select("*");
+        if (!invError && dbInventory) {
+          if (dbInventory.length > 0) {
+            console.log(`[Supabase] Decoupled relational read: Found ${dbInventory.length} items in 'inventory_items' table.`);
+            loadedState.master = dbInventory.map((row: any) => ({
+              code: row.code,
+              name: row.name,
+              unit: row.unit || "pcs",
+              par: typeof row.par_stock === "number" ? row.par_stock : parseFloat(row.par_stock || "10"),
+              price: typeof row.cost_per_unit === "number" ? row.cost_per_unit : parseFloat(row.cost_per_unit || "0"),
+              supplier: row.supplier || "Tanamera Coffee",
+              temp: row.temp || "Suhu Ruang",
+              shelf: row.shelf || "—",
+              loc: row.loc || "gudang"
+            }));
+
+            // Sync quantities & storage distributions
+            dbInventory.forEach((row: any) => {
+              if (row.qty_awal !== undefined) {
+                loadedState.inventory[row.code] = {
+                  awal: typeof row.qty_awal === "number" ? row.qty_awal : parseFloat(row.qty_awal || "0"),
+                  masuk: typeof row.qty_masuk === "number" ? row.qty_masuk : parseFloat(row.qty_masuk || "0"),
+                  keluar: typeof row.qty_keluar === "number" ? row.qty_keluar : parseFloat(row.qty_keluar || "0"),
+                  waste: typeof row.qty_waste === "number" ? row.qty_waste : parseFloat(row.qty_waste || "0")
+                };
+              }
+              if (row.qty_gudang !== undefined) {
+                loadedState.storage.gudang[row.code] = typeof row.qty_gudang === "number" ? row.qty_gudang : parseFloat(row.qty_gudang || "0");
+              }
+              if (row.qty_bar !== undefined) {
+                loadedState.storage.bar[row.code] = typeof row.qty_bar === "number" ? row.qty_bar : parseFloat(row.qty_bar || "0");
+              }
+            });
+          }
+        }
+      } catch (err: any) {
+        console.warn("[Supabase] Optional decoupled query for inventory_items failed, using local fallback:", err.message);
+      }
+
+      // 2. Relational Stock Movements
+      try {
+        const { data: dbMovements, error: movError } = await (supabase as any)
+          .from("stock_movements")
+          .select("*");
+        if (!movError && dbMovements && dbMovements.length > 0) {
+          loadedState.stockMovements = dbMovements.map((row: any) => ({
+            id: row.id,
+            item_id: row.item_code || row.itemCode,
+            type: row.type === "STOCK_IN" ? "IN" : row.type === "STOCK_OUT" ? "OUT" : "ADJUST",
+            quantity: typeof row.qty === "number" ? row.qty : parseFloat(row.qty || "0"),
+            before_stock: 0,
+            after_stock: 0,
+            reason: row.note || row.reason || "",
+            created_by: row.created_by || "System",
+            created_at: row.created_at || row.createdAt || new Date().toISOString()
+          }));
+        }
+      } catch (err: any) {
+        console.warn("[Supabase] Optional query for stock_movements failed:", err.message);
+      }
+
+      // 3. Relational Attendance Logs
+      try {
+        const { data: dbAttendance, error: attError } = await (supabase as any)
+          .from("attendance_logs")
+          .select("*");
+        if (!attError && dbAttendance && dbAttendance.length > 0) {
+          loadedState.attendance = dbAttendance.map((row: any) => ({
+            id: row.id,
+            userId: row.user_id || row.userId || "u-staff",
+            userName: row.user_name || "Staff",
+            role: row.role || "Barista",
+            date: row.check_in ? row.check_in.split("T")[0] : new Date().toISOString().split("T")[0],
+            checkIn: row.check_in || "",
+            checkOut: row.check_out || undefined,
+            shift: row.shift || "Pagi",
+            status: row.status === "Terlambat" ? "Terlambat" : "Hadir",
+            hoursWorked: row.hours_worked || undefined
+          }));
+        }
+      } catch (err: any) {
+        console.warn("[Supabase] Optional query for attendance_logs failed:", err.message);
+      }
+
+      // 4. Relational POS Transactions / Sales
+      try {
+        const { data: dbSales, error: salesError } = await (supabase as any)
+          .from("transactions")
+          .select("*");
+        if (!salesError && dbSales && dbSales.length > 0) {
+          loadedState.sales = dbSales.map((row: any) => ({
+            id: row.id,
+            recipeId: row.order_code || row.id,
+            recipeName: row.recipe_name || "Espresso Drink",
+            qty: row.qty || 1,
+            sellPrice: (row.total_amount || 0) / (row.qty || 1),
+            totalRevenue: row.total_amount || 0,
+            totalCost: row.total_cost || 0,
+            date: row.created_at || row.date || new Date().toISOString(),
+            by: row.cashier_id || "Cashier"
+          }));
+        }
+      } catch (err: any) {
+        console.warn("[Supabase] Optional query for transactions failed:", err.message);
+      }
+
+      // 5. Relational Suppliers
+      try {
+        const { data: dbSuppliers, error: supError } = await (supabase as any)
+          .from("suppliers")
+          .select("*");
+        if (!supError && dbSuppliers && dbSuppliers.length > 0) {
+          loadedState.suppliers = dbSuppliers.map((row: any) => ({
+            id: row.id,
+            name: row.name,
+            category: row.category || "Coffee",
+            contactPerson: row.contact_person || row.name,
+            phone: row.contact_phone || row.phone || "08123456789",
+            email: row.email || "supplier@coffeeops.com",
+            address: row.address || "",
+            leadTimeDays: row.lead_time_days || 2,
+            paymentTerms: row.payment_terms || "COD",
+            rating: row.rating || 90,
+            deliveryAccuracy: row.delivery_accuracy || 95,
+            productQuality: row.product_quality || 95,
+            priceStability: row.price_stability || 90,
+            responseTime: row.response_time || 90
+          }));
+        }
+      } catch (err: any) {
+        console.warn("[Supabase] Optional query for suppliers failed:", err.message);
+      }
+
+      // 6. Relational Audit Logs
+      try {
+        const { data: dbAudit, error: auditError } = await (supabase as any)
+          .from("system_audit_logs")
+          .select("*");
+        if (!auditError && dbAudit && dbAudit.length > 0) {
+          loadedState.activityLogsGlobal = dbAudit.map((row: any) => ({
+            id: row.id,
+            user_id: row.user_id || "System",
+            action: row.action_type || "info",
+            description: row.description || "",
+            created_at: row.created_at || new Date().toISOString()
+          }));
+        }
+      } catch (err: any) {
+        console.warn("[Supabase] Optional query for system_audit_logs failed:", err.message);
+      }
     }
 
     return loadedState;
@@ -305,14 +505,264 @@ async function loadStateFromSupabase(): Promise<CoffeeOpsState | null> {
 async function saveStateToSupabase(state: CoffeeOpsState) {
   if (!supabase) return;
   try {
+    // 1. Decoupled Table Backups - Commit granularly to Relational Postgres Tables first
+    
+    // Save Master Items of Inventory
+    let invItemsResult: any = "SUCCESS";
+    let invItemsErr: any = null;
+    try {
+      const list = state.master || [];
+      const payloads = await Promise.all(list.map(async (m: any) => {
+        const inv = state.inventory[m.code] || { awal: 0, masuk: 0, keluar: 0, waste: 0 };
+        const gudangVal = state.storage?.gudang?.[m.code] ?? 0;
+        const barVal = state.storage?.bar?.[m.code] ?? 0;
+        
+        const payloadInput = {
+          code: m.code,
+          name: m.name,
+          unit: m.unit,
+          par: m.par,
+          price: m.price,
+          awal: inv.awal,
+          masuk: inv.masuk,
+          keluar: inv.keluar,
+          waste: inv.waste,
+          gudang: gudangVal,
+          bar: barVal,
+          supplier: m.supplier,
+          temp: m.temp,
+          shelf: m.shelf,
+          loc: m.loc
+        };
+        return buildSafeInventoryItemPayload(payloadInput);
+      }));
+
+      if (payloads.length > 0) {
+        const { error, data } = await (supabase as any).from("inventory_items").upsert(payloads).select();
+        if (error) {
+          invItemsErr = error;
+          console.error("[Supabase] Error upserting inventory_items:", error);
+        } else {
+          invItemsResult = data || `UPSERTED ${payloads.length} ROWS`;
+        }
+      }
+    } catch (e: any) {
+      invItemsErr = e;
+      console.warn("[Supabase] Upsert to inventory_items failed:", e.message);
+    }
+    console.log(`\n[INVENTORY]
+ACTION: UPSERT_INVENTORY_ITEMS_MASTER
+DATABASE TABLE: inventory_items
+QUERY RESULT: ${JSON.stringify(invItemsResult)}
+ERROR: ${invItemsErr ? JSON.stringify(invItemsErr.message || invItemsErr) : "NONE"}\n`);
+
+    // Save Stock Movements
+    let movementsResult: any = "SUCCESS";
+    let movementsErr: any = null;
+    try {
+      const list = state.stockMovements || [];
+      if (list.length > 0) {
+        const testRowQuery = await (supabase as any).from("stock_movements").select("*").limit(1);
+        const dbCols = (testRowQuery.data && testRowQuery.data.length > 0) ? Object.keys(testRowQuery.data[0]) : ["item_code", "qty", "type", "note", "created_at"];
+        
+        const dbPayloads = list.map((m: any) => {
+          const dbRow: any = {};
+          if (dbCols.includes("item_code")) dbRow.item_code = m.item_id || m.itemCode || "BK-001";
+          if (dbCols.includes("itemCode")) dbRow.itemCode = m.item_id || m.itemCode || "BK-001";
+          if (dbCols.includes("qty")) dbRow.qty = m.quantity || m.qty || 0;
+          if (dbCols.includes("quantity")) dbRow.quantity = m.quantity || m.qty || 0;
+          if (dbCols.includes("type")) dbRow.type = m.type === "IN" ? "STOCK_IN" : m.type === "OUT" ? "STOCK_OUT" : "WASTE";
+          if (dbCols.includes("note")) dbRow.note = m.reason || "";
+          if (dbCols.includes("reason")) dbRow.reason = m.reason || "";
+          if (dbCols.includes("created_at")) dbRow.created_at = m.created_at || new Date().toISOString();
+          if (dbCols.includes("createdAt")) dbRow.createdAt = m.created_at || new Date().toISOString();
+          return dbRow;
+        });
+        const { error, data } = await (supabase as any).from("stock_movements").upsert(dbPayloads).select();
+        if (error) {
+          movementsErr = error;
+          console.error("[Supabase] Fail stock_movements upsert:", error);
+        } else {
+          movementsResult = data || `UPSERTED ${dbPayloads.length} MOVEMENTS`;
+        }
+      }
+    } catch (e: any) {
+      movementsErr = e;
+      console.warn("[Supabase] Stock movements upsert skipped:", e.message);
+    }
+    console.log(`\n[INVENTORY]
+ACTION: UPSERT_STOCK_MOVEMENTS
+DATABASE TABLE: stock_movements
+QUERY RESULT: ${JSON.stringify(movementsResult)}
+ERROR: ${movementsErr ? JSON.stringify(movementsErr.message || movementsErr) : "NONE"}\n`);
+
+    // Save Attendance Logs
+    let attendanceResult: any = "SUCCESS";
+    let attendanceErr: any = null;
+    try {
+      const list = state.attendance || [];
+      if (list.length > 0) {
+        const testRowQuery = await (supabase as any).from("attendance_logs").select("*").limit(1);
+        const dbCols = (testRowQuery.data && testRowQuery.data.length > 0) ? Object.keys(testRowQuery.data[0]) : ["user_id", "check_in", "status"];
+        
+        const dbPayloads = list.map((a: any) => {
+          const dbRow: any = {};
+          if (dbCols.includes("id")) dbRow.id = a.id;
+          if (dbCols.includes("user_id")) dbRow.user_id = a.userId || a.user_id;
+          if (dbCols.includes("userId")) dbRow.userId = a.userId || a.user_id;
+          if (dbCols.includes("check_in")) dbRow.check_in = a.checkIn || a.check_in || new Date().toISOString();
+          if (dbCols.includes("check_out")) dbRow.check_out = a.checkOut || null;
+          if (dbCols.includes("status")) dbRow.status = a.status || "Hadir";
+          if (dbCols.includes("gps_latitude") && a.gps_latitude) dbRow.gps_latitude = a.gps_latitude;
+          if (dbCols.includes("distance_radius_meters") && a.distance_radius_meters) dbRow.distance_radius_meters = a.distance_radius_meters;
+          return dbRow;
+        });
+        const { error, data } = await (supabase as any).from("attendance_logs").upsert(dbPayloads).select();
+        if (error) {
+          attendanceErr = error;
+          console.error("[Supabase] Fail attendance_logs upsert:", error);
+        } else {
+          attendanceResult = data || `UPSERTED ${dbPayloads.length} TIMECARDS`;
+        }
+      }
+    } catch (e: any) {
+      attendanceErr = e;
+      console.warn("[Supabase] Attendance upsert skipped:", e.message);
+    }
+    console.log(`\n[ATTENDANCE]
+ACTION: UPSERT_ATTENDANCE_CARDS
+DATABASE TABLE: attendance_logs
+QUERY RESULT: ${JSON.stringify(attendanceResult)}
+ERROR: ${attendanceErr ? JSON.stringify(attendanceErr.message || attendanceErr) : "NONE"}\n`);
+
+    // Save POS Sales Transactions
+    let salesResult: any = "SUCCESS";
+    let salesErr: any = null;
+    try {
+      const sales = state.sales || [];
+      if (sales.length > 0) {
+        const testRowQuery = await (supabase as any).from("transactions").select("*").limit(1);
+        const dbCols = (testRowQuery.data && testRowQuery.data.length > 0) ? Object.keys(testRowQuery.data[0]) : ["order_code", "total_amount"];
+        const dbPayloads = sales.map((s: any) => {
+          const dbRow: any = {};
+          if (dbCols.includes("id")) dbRow.id = s.id;
+          if (dbCols.includes("order_code")) dbRow.order_code = s.recipeId || s.id;
+          if (dbCols.includes("total_amount")) dbRow.total_amount = s.totalRevenue || 0;
+          if (dbCols.includes("created_at")) dbRow.created_at = s.date || new Date().toISOString();
+          if (dbCols.includes("payment_method")) dbRow.payment_method = s.payment_method || "CASH";
+          if (dbCols.includes("status")) dbRow.status = "Settlement";
+          return dbRow;
+        });
+        const { error, data } = await (supabase as any).from("transactions").upsert(dbPayloads).select();
+        if (error) {
+          salesErr = error;
+          console.error("[Supabase] Fail transactions upsert:", error);
+        } else {
+          salesResult = data || `UPSERTED ${dbPayloads.length} TRANSACTIONS`;
+        }
+      }
+    } catch (e: any) {
+      salesErr = e;
+      console.warn("[Supabase] POS sales upsert skipped:", e.message);
+    }
+    console.log(`\n[POS_SALES]
+ACTION: UPSERT_SALES_DOCUMENTS
+DATABASE TABLE: transactions
+QUERY RESULT: ${JSON.stringify(salesResult)}
+ERROR: ${salesErr ? JSON.stringify(salesErr.message || salesErr) : "NONE"}\n`);
+
+    // Save Suppliers
+    let supplierResult: any = "SUCCESS";
+    let supplierErr: any = null;
+    try {
+      const list = state.suppliers || [];
+      if (list.length > 0) {
+        const testRowQuery = await (supabase as any).from("suppliers").select("*").limit(1);
+        const dbCols = (testRowQuery.data && testRowQuery.data.length > 0) ? Object.keys(testRowQuery.data[0]) : ["name"];
+        const dbPayloads = list.map((s: any) => {
+          const dbRow: any = {};
+          if (dbCols.includes("id")) dbRow.id = s.id;
+          if (dbCols.includes("name")) dbRow.name = s.name;
+          if (dbCols.includes("contact_phone")) dbRow.contact_phone = s.phone || s.contact_phone || "0";
+          if (dbCols.includes("email")) dbRow.email = s.email;
+          if (dbCols.includes("address")) dbRow.address = s.address;
+          return dbRow;
+        });
+        const { error, data } = await (supabase as any).from("suppliers").upsert(dbPayloads).select();
+        if (error) {
+          supplierErr = error;
+          console.error("[Supabase] Fail suppliers upsert:", error);
+        } else {
+          supplierResult = data || `UPSERTED ${dbPayloads.length} SUPPLIERS`;
+        }
+      }
+    } catch (e: any) {
+      supplierErr = e;
+      console.warn("[Supabase] Suppliers upsert skipped:", e.message);
+    }
+    console.log(`\n[PROCUREMENT]
+ACTION: UPSERT_SUPPLIER_PROFILES
+DATABASE TABLE: suppliers
+QUERY RESULT: ${JSON.stringify(supplierResult)}
+ERROR: ${supplierErr ? JSON.stringify(supplierErr.message || supplierErr) : "NONE"}\n`);
+
+    // Save Audit Logs
+    let auditResult: any = "SUCCESS";
+    let auditErr: any = null;
+    try {
+      const logs = state.activityLogsGlobal || [];
+      if (logs.length > 0) {
+        const testRowQuery = await (supabase as any).from("system_audit_logs").select("*").limit(1);
+        if (testRowQuery.data) {
+          const dbCols = Object.keys(testRowQuery.data[0] || { action_type: "" });
+          const dbPayloads = logs.map((l: any) => {
+            const dbRow: any = {};
+            if (dbCols.includes("id")) dbRow.id = l.id;
+            if (dbCols.includes("action_type")) dbRow.action_type = l.action;
+            if (dbCols.includes("table_impacted")) dbRow.table_impacted = "various";
+            if (dbCols.includes("description")) dbRow.description = l.description;
+            if (dbCols.includes("created_at")) dbRow.created_at = l.created_at || new Date().toISOString();
+            return dbRow;
+          });
+          const { error, data } = await (supabase as any).from("system_audit_logs").upsert(dbPayloads).select();
+          if (error) {
+            auditErr = error;
+            console.error("[Supabase] Fail audit-log upsert:", error);
+          } else {
+            auditResult = data || `UPSERTED ${dbPayloads.length} AUDIT LOGS`;
+          }
+        }
+      }
+    } catch (e: any) {
+      auditErr = e;
+    }
+    console.log(`\n[ACTIVITY_LOG]
+ACTION: UPSERT_SYSTEM_AUDIT_LOGS
+DATABASE TABLE: system_audit_logs
+QUERY RESULT: ${JSON.stringify(auditResult)}
+ERROR: ${auditErr ? JSON.stringify(auditErr.message || auditErr) : "NONE"}\n`);
+
+    // 2. SCRUB MONOLITHIC COFFEEOPS_STATE COLUMN WRITES of operational tables to prevent stale restore overwrites
+    const databaseSubset = { ...state };
+    delete databaseSubset.users;
+    delete databaseSubset.employees;
+    delete databaseSubset.master;
+    delete databaseSubset.inventory;
+    delete databaseSubset.storage;
+    delete databaseSubset.suppliers;
+    delete databaseSubset.stockMovements;
+    delete databaseSubset.attendance;
+    delete databaseSubset.sales;
+    delete databaseSubset.activityLogsGlobal;
+
     const { error } = await (supabase as any)
       .from("coffeeops_state")
-      .upsert({ id: "default", state, updated_at: new Date().toISOString() });
+      .upsert({ id: "default", state: databaseSubset, updated_at: new Date().toISOString() });
     
     if (error) {
-      console.error("[Supabase] Cloud sync push failed:", error);
+      console.error("[Supabase] Multi-Branch client fallback configuration synced failed:", error);
     } else {
-      console.log("[Supabase] Production state synced to cloud database.");
+      console.log("[Supabase] Relational sync executed successfully. Monolithic state table saved (scrubbed of operational domains).");
     }
   } catch (err) {
     console.error("[Supabase] Sync network error:", err);

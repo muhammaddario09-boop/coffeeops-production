@@ -1554,55 +1554,29 @@ export default function Report({ state, onImportBackup }: ReportProps) {
         </div>
       </div>
 
-      {/* NEW: Export or Import Database Card Section */}
+      {/* NEW: Export Database Card Section (EXPORT ONLY) */}
       <div className="bg-gradient-to-r from-amber-950/20 to-stone-900/60 border border-[#D4A853]/25 rounded-2xl p-5 space-y-4 shadow-xl">
         <div className="flex items-center gap-3 border-b border-amber-500/10 pb-2.5">
           <span className="text-xl">🗄️</span>
           <div>
-            <h4 className="font-serif font-bold text-sm text-yellow-150">Ekspor / Impor Seluruh Database</h4>
-            <p className="text-[10px] text-amber-200/50">Transfer, backup, atau pulihkan data kafe Axes Coffee dalam hitungan detik.</p>
+            <h4 className="font-serif font-bold text-sm text-yellow-150">Ekspor Seluruh Database (EXPORT ONLY)</h4>
+            <p className="text-[10px] text-amber-200/50">Unduh cadangan data kafe Axes Coffee secara aman. Fitur restorasi melalui import dinonaktifkan demi stabilitas database relasional.</p>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div className="bg-black/25 rounded-xl p-4 border border-amber-500/5 flex flex-col justify-between space-y-3">
-            <div>
-              <h5 className="text-xs font-bold text-amber-200">备份 / Backup Database (.JSON)</h5>
-              <p className="text-[10px] text-amber-100/35 mt-1 leading-normal">
-                Unduh salinan cadangan lengkap database berisi daftar bahan baku, absensi, stok gudang harian, dan mutasi internal.
-              </p>
-            </div>
-            <button
-              onClick={handleExportDatabase}
-              className="w-full bg-amber-500 hover:bg-amber-600 text-amber-950 text-xs font-bold py-2 rounded-lg cursor-pointer transition active:scale-95 text-center block shadow"
-            >
-              📥 Ekspor &amp; Unduh Database (.json)
-            </button>
+        <div className="bg-black/25 rounded-xl p-4 border border-amber-500/5 flex flex-col justify-between space-y-3">
+          <div>
+            <h5 className="text-xs font-bold text-amber-200">备份 / Backup Database (.JSON)</h5>
+            <p className="text-[10px] text-amber-100/35 mt-1 leading-normal">
+              Unduh salinan cadangan lengkap database berisi daftar bahan baku, absensi, stok gudang harian, dan mutasi internal.
+            </p>
           </div>
-
-          <div className="bg-black/25 rounded-xl p-4 border border-amber-500/5 flex flex-col justify-between space-y-3">
-            <div>
-              <h5 className="text-xs font-bold text-amber-200">恢复 / Pulihkan Database (.JSON)</h5>
-              <p className="text-[10px] text-amber-100/35 mt-1 leading-normal">
-                Unggah kembali file JSON CoffeeOps hasil download prafatur untuk merestorasi seluruh data dan login staff ke perangkat baru Anda.
-              </p>
-            </div>
-            <div>
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleImportDatabase}
-                accept=".json"
-                className="hidden"
-              />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="w-full bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 text-amber-300 text-xs font-bold py-2 rounded-lg cursor-pointer transition active:scale-95 text-center block"
-              >
-                📤 Pilih &amp; Impor Database (.json)
-              </button>
-            </div>
-          </div>
+          <button
+            onClick={handleExportDatabase}
+            className="w-full sm:w-auto bg-amber-500 hover:bg-amber-600 text-amber-950 text-xs font-bold py-2.5 px-6 rounded-lg cursor-pointer transition active:scale-95 text-center inline-block shadow"
+          >
+            📥 Ekspor &amp; Unduh Database (.json)
+          </button>
         </div>
       </div>
 
