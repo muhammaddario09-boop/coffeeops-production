@@ -148,6 +148,20 @@ export default function App() {
       ...state,
       deviceSessions: updatedSessions
     };
+    nextState.activities = addActivity("🔑", `Staf ${user.name} (${user.role}) login ke sistem`, "info");
+    
+    const newAudit = {
+      id: "AUD-" + Date.now().toString().slice(-4),
+      user: user.name,
+      role: user.role,
+      action: "Login Sesi Baru",
+      page: "Kiosk Login",
+      timestamp: new Date().toISOString().replace("T", " ").substring(0, 19),
+      device: info.device,
+      ip: info.ip
+    };
+    nextState.auditLogs = [newAudit, ...(state.auditLogs || [])].slice(0, 30);
+
     syncStateWithServer(nextState);
 
     if (user.role === "Waiter" || user.role === "Head Waiter") {
@@ -158,6 +172,7 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    const userBeforeLogout = currentUser;
     const sessId = localStorage.getItem("coffeeops_sessionId");
     setCurrentUser(null);
     localStorage.removeItem("coffeeops_currentUser");
@@ -165,13 +180,33 @@ export default function App() {
     localStorage.removeItem("coffeeops_loginExpiry");
     localStorage.removeItem("coffeeops_sessionId");
 
+    let nextSessions = state.deviceSessions || [];
     if (sessId && state.deviceSessions) {
-      const nextSessions = (state.deviceSessions || []).filter(s => s.id !== sessId);
-      syncStateWithServer({
-        ...state,
-        deviceSessions: nextSessions
-      });
+      nextSessions = (state.deviceSessions || []).filter(s => s.id !== sessId);
     }
+
+    const nextState = {
+      ...state,
+      deviceSessions: nextSessions
+    };
+
+    if (userBeforeLogout) {
+      nextState.activities = addActivity("🚪", `Staf ${userBeforeLogout.name} (${userBeforeLogout.role}) logout dari sistem`, "info");
+      
+      const newAudit = {
+        id: "AUD-" + Date.now().toString().slice(-4),
+        user: userBeforeLogout.name,
+        role: userBeforeLogout.role,
+        action: "Logout Sesi",
+        page: "Logout Button",
+        timestamp: new Date().toISOString().replace("T", " ").substring(0, 19),
+        device: "Web Browser",
+        ip: "Client Local"
+      };
+      nextState.auditLogs = [newAudit, ...(state.auditLogs || [])].slice(0, 30);
+    }
+
+    syncStateWithServer(nextState);
   };
 
   const handleClockIn = (userId: string, shift: string, facePhoto?: string) => {
@@ -458,54 +493,14 @@ export default function App() {
         const serverState = await response.json();
         let mergedState: CoffeeOpsState = {
           ...serverState,
-          users: serverState.users && serverState.users.length >= 5 ? serverState.users : initialStats.users,
+          users: serverState.users && serverState.users.length > 0 ? serverState.users : initialStats.users,
           suppliers: serverState.suppliers || initialStats.suppliers,
           supplierMapping: serverState.supplierMapping || initialStats.supplierMapping,
           pos: serverState.pos || initialStats.pos,
           auditLogs: serverState.auditLogs || initialStats.auditLogs
         };
 
-        // Resilient browser-hardened DB state automatic backup and redeploy recovery engine
-        const savedLocalStateStr = localStorage.getItem("coffeeops_db_state");
-        if (savedLocalStateStr) {
-          try {
-            const localState = JSON.parse(savedLocalStateStr) as CoffeeOpsState;
-            
-            const serverEmpCount = (serverState.employees || []).length;
-            const localEmpCount = (localState.employees || []).length;
-            
-            const serverUserCount = (serverState.users || []).length;
-            const localUserCount = (localState.users || []).length;
-
-            const serverPrCount = (serverState.prs || []).length;
-            const localPrCount = (localState.prs || []).length;
-
-            // Detect server reset (e.g. Vercel redeploy losing database.json)
-            if (
-              (localEmpCount > serverEmpCount && serverEmpCount === 0) || 
-              (localUserCount > serverUserCount && serverUserCount <= 5) ||
-              (localPrCount > serverPrCount && serverPrCount === 0)
-            ) {
-              console.log("[Auto-Recovery] Vercel/Server database reset detected. Auto-recovering database from browser cache...");
-              mergedState = localState;
-              
-              // Feed recovered state back to the newly fresh server
-              fetch(getServerUrl("/api/state"), {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(localState)
-              }).catch(e => console.error("Auto-recovery sync upload failed:", e));
-              
-              // Notify the user with a beautiful elegant toast notification
-              setToastMessage("🔄 Database dipulihkan otomatis dari cache browser!");
-              setTimeout(() => setToastMessage(null), 6000);
-            }
-          } catch (e) {
-            console.error("Local recovery parse failed:", e);
-          }
-        }
-
-        // Cache the successful server state to browser's secure cache
+        // Cache the successful server state to browser's secure cache for high-performance UI rendering only (no database overwrite)
         try {
           localStorage.setItem("coffeeops_db_state", JSON.stringify(mergedState));
         } catch (e) {

@@ -63,12 +63,61 @@ const CACHE_TTL_MS = 3000; // 3 seconds Cache TTL to handle rapid multi-endpoint
 // Helper to perform automated mapping from users to employees
 function performEmployeeMapping(merged: CoffeeOpsState): boolean {
   const existingUsers = merged.users || [];
-  const currentEmployees = merged.employees || [];
-  let hasNewMappings = false;
+  let currentEmployees = merged.employees || [];
+  let changed = false;
 
+  const activeUserIds = new Set(existingUsers.map(u => u.id));
+
+  // 1. Delete matching employee if user was deleted
+  const initialLength = currentEmployees.length;
+  currentEmployees = currentEmployees.filter(emp => {
+    if (emp.userId && !activeUserIds.has(emp.userId)) {
+      changed = true;
+      return false; // delete this employee as the user is deleted
+    }
+    return true;
+  });
+
+  // 2. Sync properties for remaining / existing employees mapped from users
+  currentEmployees = currentEmployees.map(emp => {
+    if (emp.userId) {
+      const u = existingUsers.find(user => user.id === emp.userId);
+      if (u) {
+        const staffCode = u.staffCode || emp.employeeCode;
+        const branchId = u.branchId || emp.branchId || "Pusat Pangkalpinang (HQ)";
+        const email = u.email || emp.email;
+        const phone = u.whatsappNumber || emp.phone;
+        const isActive = u.isActive ?? emp.isActive;
+
+        if (
+          emp.fullName !== u.name ||
+          emp.employeeCode !== staffCode ||
+          emp.branchId !== branchId ||
+          emp.email !== email ||
+          emp.phone !== phone ||
+          emp.isActive !== isActive
+        ) {
+          changed = true;
+          return {
+            ...emp,
+            fullName: u.name,
+            employeeCode: staffCode,
+            branchId: branchId,
+            email: email,
+            phone: phone,
+            isActive: isActive
+          };
+        }
+      }
+    }
+    return emp;
+  });
+
+  // 3. Auto-populate standard employees from users that are not mapped yet
   existingUsers.forEach(u => {
+    if (u.role === "Owner") return;
     const alreadyExists = currentEmployees.some(emp => emp.userId === u.id || emp.employeeCode === u.staffCode);
-    if (!alreadyExists && u.role !== "Owner") {
+    if (!alreadyExists) {
       currentEmployees.push({
         id: "emp-" + u.id,
         userId: u.id,
@@ -81,14 +130,15 @@ function performEmployeeMapping(merged: CoffeeOpsState): boolean {
         isActive: u.isActive ?? true,
         createdAt: u.createdAt || "2026-06-01 08:00"
       });
-      hasNewMappings = true;
+      changed = true;
     }
   });
 
-  if (hasNewMappings) {
+  if (changed || currentEmployees.length !== initialLength) {
     merged.employees = currentEmployees;
+    return true;
   }
-  return hasNewMappings;
+  return false;
 }
 
 // Merge loaded state with standard initialStats fields
@@ -232,8 +282,9 @@ function loadState(): CoffeeOpsState {
 }
 
 // Save state synchronously with asynchronous web-hook/Supabase mirroring
-function saveState(state: CoffeeOpsState) {
+async function saveState(state: CoffeeOpsState) {
   cachedState = state;
+  lastSupabaseFetchTime = Date.now();
   try {
     fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2), "utf-8");
   } catch (err) {
@@ -241,9 +292,7 @@ function saveState(state: CoffeeOpsState) {
   }
 
   if (supabase) {
-    saveStateToSupabase(state).catch(err => {
-      console.error("[Supabase] Background cloud sync task failed:", err);
-    });
+    await saveStateToSupabase(state);
   }
 }
 
@@ -273,12 +322,12 @@ app.get("/api/state", (req, res) => {
   res.json(state);
 });
 
-app.post("/api/state", (req, res) => {
+app.post("/api/state", async (req, res) => {
   const newState = req.body as CoffeeOpsState;
   if (!newState || !newState.branding || !newState.master) {
     return res.status(400).json({ error: "Invalid state data" });
   }
-  saveState(newState);
+  await saveState(newState);
   res.json({ status: "success", message: "Database updated successfully across all online devices" });
 });
 
@@ -1018,7 +1067,7 @@ MESSAGE: ${mailSentResult}
     time: new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }) + " WIB"
   });
 
-  saveState(state);
+  await saveState(state);
 
   res.json({
     status: "success",
@@ -1123,7 +1172,7 @@ app.post("/api/midtrans/ping", async (req, res) => {
       status: (credentialsValid ? "success" : "failed") as any
     };
     state.midtrans_logs = [newLog, ...(state.midtrans_logs || [])].slice(0, 50);
-    saveState(state);
+    await saveState(state);
 
     return res.json({
       status: credentialsValid ? "success" : "failure",
@@ -1325,7 +1374,7 @@ app.get("/api/midtrans/status/:orderId", async (req, res) => {
         ].slice(0, 50);
       }
 
-      saveState(state);
+      await saveState(state);
     }
 
     return res.json({
@@ -1395,7 +1444,7 @@ app.post("/api/midtrans/webhook", async (req, res) => {
       status: "failed" as const
     };
     state.midtrans_logs = [failLog, ...(state.midtrans_logs || [])].slice(0, 50);
-    saveState(state);
+    await saveState(state);
     return res.status(400).json({
       status: "error",
       message: "Invalid webhook signature key configuration.",
@@ -1454,7 +1503,7 @@ app.post("/api/midtrans/webhook", async (req, res) => {
   state.midtrans_logs = [successLog, ...(state.midtrans_logs || [])].slice(0, 50);
   state.midtrans_transactions = transactions;
 
-  saveState(state);
+  await saveState(state);
 
   res.json({
     status: "success",
