@@ -315,11 +315,11 @@ export default function App() {
     const nextState = { ...state };
     if (!nextState.users) return;
     const user = nextState.users.find((u) => u.id === id);
-    nextState.users = nextState.users.filter((u) => u.id !== id);
-    nextState.activities = addActivity("⚙️", `Menghapus akun kru: ${user?.name || "Staf"}`, "info");
-    if (user) {
-      logActivityGlobal(nextState, "DELETE_EMPLOYEE", `Menghapus akun kru: ${user.name} (${user.role})`, user.name);
-    }
+    if (!user) return;
+    
+    nextState.users = nextState.users.map((u) => u.id === id ? { ...u, isActive: false, status: "inactive" } : u);
+    nextState.activities = addActivity("⚙️", `Menonaktifkan akun kru: ${user?.name || "Staf"}`, "info");
+    logActivityGlobal(nextState, "DELETE_EMPLOYEE", `Menonaktifkan (Soft-Delete) akun kru: ${user.name} (${user.role})`, user.name);
     setState(nextState);
 
     try {
@@ -327,13 +327,13 @@ export default function App() {
         method: "DELETE"
       });
       if (response.ok) {
-        triggerToast("Akun kru berhasil dihapus.");
+        triggerToast("Akun kru berhasil dinonaktifkan (Soft-Delete).");
         await fetchStateFromServer(true);
       } else {
         syncStateWithServer(nextState);
       }
     } catch (err) {
-      console.error("Failed to delete user:", err);
+      console.error("Failed to soft-delete user:", err);
       syncStateWithServer(nextState);
     }
   };

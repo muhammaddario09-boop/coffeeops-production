@@ -32,6 +32,7 @@ export default function UserManagement({
   const [newPassword, setNewPassword] = useState("");
   const [newPhoto, setNewPhoto] = useState("");
   const [isDragOver, setIsDragOver] = useState(false);
+  const [newIsActive, setNewIsActive] = useState(true);
 
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [editingPinValue, setEditingPinValue] = useState("");
@@ -72,6 +73,7 @@ export default function UserManagement({
     setNewBranch(u.branchId || "Pusat Pangkalpinang (HQ)");
     setNewPassword(u.password || "");
     setNewPhoto(u.profilePhoto || "");
+    setNewIsActive(u.isActive !== false && u.status !== "inactive");
   };
 
   const handleCancelEdit = () => {
@@ -85,6 +87,7 @@ export default function UserManagement({
     setNewBranch("Pusat Pangkalpinang (HQ)");
     setNewPassword("");
     setNewPhoto("");
+    setNewIsActive(true);
   };
 
   const handleCreateUser = (e: React.FormEvent) => {
@@ -123,6 +126,8 @@ export default function UserManagement({
         branchId: newBranch,
         password: (newRole === "Owner" || newRole === "Manager") ? (newPassword || "coffeeops123") : undefined,
         profilePhoto: newPhoto || undefined,
+        isActive: newIsActive,
+        status: newIsActive ? "active" : "inactive",
       });
 
       handleCancelEdit();
@@ -314,6 +319,23 @@ export default function UserManagement({
                 </div>
               </div>
 
+              {editingUser && (
+                <div className="flex flex-col gap-1.5 bg-amber-500/5 p-3 rounded-2xl border border-amber-500/10 animate-fadeIn">
+                  <label className="text-[10px] text-[#D4A853]/90 font-semibold uppercase tracking-wider font-mono">
+                    Status Akun &amp; Kepegawaian
+                  </label>
+                  <select
+                    id="user-status-select"
+                    value={newIsActive ? "active" : "inactive"}
+                    onChange={(e) => setNewIsActive(e.target.value === "active")}
+                    className="bg-[#FAF0E6]/5 border border-amber-500/10 focus:border-[#D4A853]/40 rounded-xl p-2.5 text-xs text-amber-100 outline-none w-full"
+                  >
+                    <option value="active" className="bg-amber-950">Active / Aktif Melayani (Hadir dalam sistem)</option>
+                    <option value="inactive" className="bg-amber-[#2c0f00] text-red-400">Inactive / Nonaktif (Soft-Deleted)</option>
+                  </select>
+                </div>
+              )}
+
               {/* Foto Pribadi Upload with Drag-and-Drop + Click Preview */}
               <div className="flex flex-col gap-1.5" id="staff-photo-upload-container">
                 <label className="text-[10px] text-amber-100/45 font-semibold uppercase tracking-wider font-mono">
@@ -494,6 +516,15 @@ export default function UserManagement({
                         </h5>
                         {isSelf && (
                           <span className="text-[8px] text-emerald-400 font-mono font-black uppercase bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/10 animate-pulse">
+                            Self
+                          </span>
+                        )}
+                        {(u.isActive === false || u.status === "inactive") ? (
+                          <span className="text-[8px] text-red-400 font-mono font-black uppercase bg-red-500/10 px-1.5 py-0.5 rounded border border-red-500/10">
+                            Inactive / Soft-Deleted
+                          </span>
+                        ) : (
+                          <span className="text-[8px] text-emerald-400 font-mono font-black uppercase bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/10">
                             Active
                           </span>
                         )}

@@ -160,6 +160,7 @@ export interface User {
   branchId?: string;
   profilePhoto?: string;
   isActive?: boolean;
+  status?: "active" | "inactive";
   lastLogin?: string;
   createdAt?: string;
   updatedAt?: string;

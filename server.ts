@@ -780,6 +780,8 @@ ERROR: ${auditErr ? JSON.stringify(auditErr.message || auditErr) : "NONE"}\n`);
 
     // 2. SCRUB MONOLITHIC COFFEEOPS_STATE COLUMN WRITES of operational tables to prevent stale restore overwrites
     const databaseSubset = { ...state };
+    
+    // Core prohibited operational domains (strict architectural constraints)
     delete databaseSubset.users;
     delete databaseSubset.employees;
     delete databaseSubset.master;
@@ -789,7 +791,37 @@ ERROR: ${auditErr ? JSON.stringify(auditErr.message || auditErr) : "NONE"}\n`);
     delete databaseSubset.stockMovements;
     delete databaseSubset.shiftAttendanceLogs;
     delete databaseSubset.sales;
+    delete databaseSubset.activities;
     delete databaseSubset.activityLogsGlobal;
+
+    // Secondary process and transactional operations scrubbing
+    delete databaseSubset.fifo;
+    delete databaseSubset.issues;
+    delete databaseSubset.wastes;
+    delete databaseSubset.grns;
+    delete databaseSubset.prs;
+    delete databaseSubset.transfers;
+    delete databaseSubset.recipes;
+    delete databaseSubset.supplierMapping;
+    delete databaseSubset.pos;
+    delete databaseSubset.dailySopChecklistRules;
+    delete databaseSubset.customHandoverFields;
+    delete databaseSubset.dailyChecklists;
+    delete databaseSubset.calibrationLogs;
+    delete databaseSubset.stockCheckLogs;
+    delete databaseSubset.temperatureLogs;
+    delete databaseSubset.shiftHandovers;
+    delete databaseSubset.incidentLogs;
+    delete databaseSubset.auditLogs;
+    delete databaseSubset.serviceInventory;
+    delete databaseSubset.serviceSop;
+    delete databaseSubset.serviceCleaning;
+    delete databaseSubset.serviceMaintenance;
+    delete databaseSubset.serviceDailyReports;
+    delete databaseSubset.serviceEvidences;
+    delete databaseSubset.serviceKPIs;
+    delete databaseSubset.fohChecklists;
+    delete databaseSubset.fohFeedback;
 
     const { error } = await (supabase as any)
       .from("coffeeops_state")
@@ -877,6 +909,8 @@ function loadState(): CoffeeOpsState {
 async function saveState(state: CoffeeOpsState) {
   cachedState = state;
   lastSupabaseFetchTime = Date.now();
+  
+  console.log(`[DATABASE WRITE]: Writing state mirror snapshot cache directly to local JSON file.`);
   try {
     fs.writeFileSync(DB_FILE, JSON.stringify(state, null, 2), "utf-8");
   } catch (err) {
@@ -893,6 +927,7 @@ async function saveState(state: CoffeeOpsState) {
   }
 
   if (supabase) {
+    console.log(`[DATABASE WRITE]: Triggering relational tables sync to Supabase database instance...`);
     await saveStateToSupabase(state);
   }
 }
@@ -955,10 +990,22 @@ app.get("/api/db-status", async (req, res) => {
 
 app.post("/api/state", async (req, res) => {
   const newState = req.body as CoffeeOpsState;
+  const sourceIp = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "Unknown";
+  
+  console.log(`\n--- [AUTO SYNC] STATE SYNCHRONIZATION EVENT ---`);
+  console.log(`[SOURCE]: ${sourceIp}`);
+  console.log(`[DATABASE WRITE]: Incoming state sync request payload processing...`);
+
+  if (cachedState && cachedState.sales && newState.sales && newState.sales.length < cachedState.sales.length) {
+    console.warn(`[OVERWRITE DETECTED]: Warning! Received a state payload with fewer sales transactions (${newState.sales.length}) than current server cached state (${cachedState.sales.length}). Relational database upserts will be performed atomically to prevent any deletion of historical transaction records.`);
+  }
+
   if (!newState || !newState.branding || !newState.master) {
+    console.error(`[DATABASE WRITE]: Invalid state payload rejected.`);
     return res.status(400).json({ error: "Invalid state data" });
   }
   await saveState(newState);
+  console.log(`[DATABASE WRITE]: State and relational tables update finished successfully.\n`);
   res.json({ status: "success", message: "Database updated successfully across all online devices" });
 });
 
@@ -1115,12 +1162,13 @@ app.delete("/api/employees/:id", async (req, res) => {
 
   if (supabase) {
     try {
-      const { error, status, statusText } = await (supabase as any)
+      const { error, status, statusText, data } = await (supabase as any)
         .from("employees")
-        .delete()
-        .eq("id", id);
+        .update({ is_active: false, status: "inactive" })
+        .eq("id", id)
+        .select();
 
-      dbResult = { error, status, statusText };
+      dbResult = { error, status, statusText, data };
     } catch (err: any) {
       dbResult = { error: err.message || err };
     }
@@ -1129,11 +1177,11 @@ app.delete("/api/employees/:id", async (req, res) => {
   }
 
   // REQUIRED LOGS FORMAT (3)
-  console.log(`\nDELETE employee id:\n${id}\n\nResponse Supabase:\n${JSON.stringify(dbResult, null, 2)}\n`);
+  console.log(`\nSOFT_DELETE employee id:\n${id}\n\nResponse Supabase:\n${JSON.stringify(dbResult, null, 2)}\n`);
 
   // Update backend monolithic state
   const state = loadState();
-  state.users = (state.users || []).filter(u => u.id !== id);
+  state.users = (state.users || []).map(u => u.id === id ? { ...u, isActive: false, is_active: false, status: "inactive" } : u);
   performEmployeeMapping(state);
   await saveState(state);
 
