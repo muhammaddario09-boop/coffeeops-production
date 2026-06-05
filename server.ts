@@ -173,7 +173,7 @@ function mergeLoadedState(loaded: Partial<CoffeeOpsState>): CoffeeOpsState {
     employeeKpis: loaded.employeeKpis || [],
     customerFeedbacks: loaded.customerFeedbacks || [],
     incidentReports: loaded.incidentReports || [],
-    attendance: loaded.attendance || initialStats.attendance || [],
+    shiftAttendanceLogs: loaded.shiftAttendanceLogs || [],
     sales: loaded.sales || [],
     recipes: loaded.recipes || [],
     homemadeIngredients: loaded.homemadeIngredients || [],
@@ -409,18 +409,37 @@ async function loadStateFromSupabase(): Promise<CoffeeOpsState | null> {
           .from("attendance_logs")
           .select("*");
         if (!attError && dbAttendance && dbAttendance.length > 0) {
-          loadedState.attendance = dbAttendance.map((row: any) => ({
-            id: row.id,
-            userId: row.user_id || row.userId || "u-staff",
-            userName: row.user_name || "Staff",
-            role: row.role || "Barista",
-            date: row.check_in ? row.check_in.split("T")[0] : new Date().toISOString().split("T")[0],
-            checkIn: row.check_in || "",
-            checkOut: row.check_out || undefined,
-            shift: row.shift || "Pagi",
-            status: row.status === "Terlambat" ? "Terlambat" : "Hadir",
-            hoursWorked: row.hours_worked || undefined
-          }));
+          loadedState.shiftAttendanceLogs = dbAttendance.map((row: any) => {
+            const dateVal = row.check_in ? row.check_in.split("T")[0] : new Date().toISOString().split("T")[0];
+            const checkInTime = row.check_in && row.check_in.includes("T") 
+              ? row.check_in.split("T")[1].substring(0, 8) 
+              : (row.check_in || "");
+            const checkOutTime = row.check_out && row.check_out.includes("T") 
+              ? row.check_out.split("T")[1].substring(0, 8) 
+              : (row.check_out || undefined);
+
+            return {
+              id: row.id,
+              userId: row.user_id || row.userId || "u-staff",
+              userName: row.user_name || "Staff",
+              role: row.role || "Barista",
+              date: dateVal,
+              checkIn: checkInTime,
+              checkOut: checkOutTime,
+              shiftId: row.shift_id || "s-pagi",
+              status: row.status === "Terlambat" ? "Terlambat" : row.status === "Tidak Hadir" ? "Tidak Hadir" : row.status === "Izin" ? "Izin" : "Hadir",
+              latenessMinutes: row.lateness_minutes || row.latenessMinutes || 0,
+              overtimeMinutes: row.overtime_minutes || row.overtimeMinutes || 0,
+              breakStartTime: row.break_start_time || row.breakStartTime || undefined,
+              breakEndTime: row.break_end_time || row.breakEndTime || undefined,
+              totalBreakMinutes: row.total_break_minutes || row.totalBreakMinutes || undefined,
+              qrScanned: row.qr_scanned || row.qrScanned || false,
+              facePhoto: row.face_photo || row.facePhoto || undefined,
+              gpsLatitude: row.gps_latitude || row.gpsLatitude || undefined,
+              gpsLongitude: row.gps_longitude || row.gpsLongitude || undefined,
+              distanceRadiusMeters: row.distance_radius_meters || row.distanceRadiusMeters || undefined
+            };
+          });
         }
       } catch (err: any) {
         console.warn("[Supabase] Optional query for attendance_logs failed:", err.message);
@@ -600,7 +619,7 @@ ERROR: ${movementsErr ? JSON.stringify(movementsErr.message || movementsErr) : "
     let attendanceResult: any = "SUCCESS";
     let attendanceErr: any = null;
     try {
-      const list = state.attendance || [];
+      const list = state.shiftAttendanceLogs || [];
       if (list.length > 0) {
         const testRowQuery = await (supabase as any).from("attendance_logs").select("*").limit(1);
         const dbCols = (testRowQuery.data && testRowQuery.data.length > 0) ? Object.keys(testRowQuery.data[0]) : ["user_id", "check_in", "status"];
@@ -608,13 +627,23 @@ ERROR: ${movementsErr ? JSON.stringify(movementsErr.message || movementsErr) : "
         const dbPayloads = list.map((a: any) => {
           const dbRow: any = {};
           if (dbCols.includes("id")) dbRow.id = a.id;
-          if (dbCols.includes("user_id")) dbRow.user_id = a.userId || a.user_id;
-          if (dbCols.includes("userId")) dbRow.userId = a.userId || a.user_id;
-          if (dbCols.includes("check_in")) dbRow.check_in = a.checkIn || a.check_in || new Date().toISOString();
-          if (dbCols.includes("check_out")) dbRow.check_out = a.checkOut || null;
+          if (dbCols.includes("user_id")) dbRow.user_id = a.userId;
+          if (dbCols.includes("user_name")) dbRow.user_name = a.userName;
+          if (dbCols.includes("role")) dbRow.role = a.role;
+          if (dbCols.includes("check_in")) dbRow.check_in = a.checkIn ? (a.checkIn.includes("T") ? a.checkIn : `${a.date}T${a.checkIn}`) : new Date().toISOString();
+          if (dbCols.includes("check_out")) dbRow.check_out = a.checkOut ? (a.checkOut.includes("T") ? a.checkOut : `${a.date}T${a.checkOut}`) : null;
+          if (dbCols.includes("shift_id")) dbRow.shift_id = a.shiftId;
           if (dbCols.includes("status")) dbRow.status = a.status || "Hadir";
-          if (dbCols.includes("gps_latitude") && a.gps_latitude) dbRow.gps_latitude = a.gps_latitude;
-          if (dbCols.includes("distance_radius_meters") && a.distance_radius_meters) dbRow.distance_radius_meters = a.distance_radius_meters;
+          if (dbCols.includes("lateness_minutes")) dbRow.lateness_minutes = a.latenessMinutes || 0;
+          if (dbCols.includes("overtime_minutes")) dbRow.overtime_minutes = a.overtimeMinutes || 0;
+          if (dbCols.includes("break_start_time")) dbRow.break_start_time = a.breakStartTime || null;
+          if (dbCols.includes("break_end_time")) dbRow.break_end_time = a.breakEndTime || null;
+          if (dbCols.includes("total_break_minutes")) dbRow.total_break_minutes = a.totalBreakMinutes || null;
+          if (dbCols.includes("qr_scanned")) dbRow.qr_scanned = a.qrScanned || false;
+          if (dbCols.includes("face_photo")) dbRow.face_photo = a.facePhoto || null;
+          if (dbCols.includes("gps_latitude")) dbRow.gps_latitude = a.gpsLatitude || null;
+          if (dbCols.includes("gps_longitude")) dbRow.gps_longitude = a.gpsLongitude || null;
+          if (dbCols.includes("distance_radius_meters")) dbRow.distance_radius_meters = a.distanceRadiusMeters || null;
           return dbRow;
         });
         const { error, data } = await (supabase as any).from("attendance_logs").upsert(dbPayloads).select();
@@ -751,7 +780,7 @@ ERROR: ${auditErr ? JSON.stringify(auditErr.message || auditErr) : "NONE"}\n`);
     delete databaseSubset.storage;
     delete databaseSubset.suppliers;
     delete databaseSubset.stockMovements;
-    delete databaseSubset.attendance;
+    delete databaseSubset.shiftAttendanceLogs;
     delete databaseSubset.sales;
     delete databaseSubset.activityLogsGlobal;
 

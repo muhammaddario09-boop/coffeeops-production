@@ -340,7 +340,6 @@ export interface CoffeeOpsState {
   stockMovements?: StockMovement[];
   activityLogsGlobal?: ActivityLogGlobal[];
   users?: User[];
-  attendance?: AttendanceLog[];
   recipes?: DrinkRecipe[];
   sales?: SaleTransaction[];
   homemadeIngredients?: HomemadeIngredient[];
@@ -1013,6 +1012,10 @@ export interface ShiftAttendanceLog {
   breakEndTime?: string; // "HH:MM:SS"
   totalBreakMinutes?: number;
   qrScanned?: boolean;
+  facePhoto?: string;
+  gpsLatitude?: number;
+  gpsLongitude?: number;
+  distanceRadiusMeters?: number;
 }
 
 export interface BreakLog {

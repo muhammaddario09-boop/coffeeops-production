@@ -7,7 +7,7 @@ interface ReportProps {
 }
 
 export default function Report({ state, onImportBackup }: ReportProps) {
-  const { master, inventory, wastes, prs, grns, transfers, attendance, issues } = state;
+  const { master, inventory, wastes, prs, grns, transfers, shiftAttendanceLogs: attendance = [], issues } = state;
   const [isPrintPreviewOpen, setIsPrintPreviewOpen] = useState(false);
   const [selectedMonthFilter, setSelectedMonthFilter] = useState<string>("all");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -399,16 +399,29 @@ export default function Report({ state, onImportBackup }: ReportProps) {
     ];
 
     const logs = attendance || [];
-    const rows = logs.map((a) => [
-      a.date,
-      a.userName,
-      a.role,
-      a.checkIn,
-      a.checkOut || "Active",
-      a.shift,
-      a.status,
-      a.hoursWorked ? `${a.hoursWorked.toFixed(1)} jam` : "—"
-    ]);
+    const rows = logs.map((a) => {
+      let calculatedHours = "—";
+      if (a.checkIn && a.checkOut) {
+        try {
+          const [inH, inM] = a.checkIn.split(":").map(Number);
+          const [outH, outM] = a.checkOut.split(":").map(Number);
+          let diff = (outH * 60 + outM) - (inH * 60 + inM);
+          if (diff < 0) diff += 24 * 60;
+          calculatedHours = `${(diff / 60).toFixed(1)} jam`;
+        } catch (e) {}
+      }
+      const shiftName = a.shiftId === "s1" ? "Pagi" : a.shiftId === "s2" ? "Siang" : a.shiftId === "s3" ? "Malam" : a.shiftId || "General";
+      return [
+        a.date,
+        a.userName,
+        a.role,
+        a.checkIn,
+        a.checkOut || "Active",
+        shiftName,
+        a.status,
+        calculatedHours
+      ];
+    });
 
     const csvContent = "\uFEFF" + [headers.join(","), ...rows.map(r => r.map(x => `"${x.replace(/"/g, '""')}"`).join(","))].join("\n");
     downloadBlob(csvContent, "text/csv;charset=utf-8;", "Laporan_Absensi_Kehadiran_Karyawan.csv");
@@ -1100,22 +1113,35 @@ export default function Report({ state, onImportBackup }: ReportProps) {
                       </tr>
                     </thead>
                     <tbody>
-                      {attendanceList.map((a) => (
-                        <tr key={a.id} className="border-b border-amber-500/5 hover:bg-amber-500/5 py-1">
-                          <td className="py-2 text-amber-200/50 font-mono text-[10px]">{a.date}</td>
-                          <td className="py-2 font-bold text-amber-100 print-text-dark">{a.userName}</td>
-                          <td className="py-2 text-amber-250 text-[10px] uppercase font-semibold">{a.role}</td>
-                          <td className="py-2">{a.shift}</td>
-                          <td className="py-2 font-mono text-emerald-400">{a.checkIn}</td>
-                          <td className="py-2 font-mono text-amber-200">{a.checkOut || "Active Shift"}</td>
-                          <td className="py-2 text-right font-mono text-amber-100 print-text-dark">{a.hoursWorked ? `${a.hoursWorked.toFixed(1)} jam` : "—"}</td>
-                          <td className="py-2 text-right">
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-sans font-bold ${a.status === "Terlambat" ? "bg-red-950/40 text-red-550 border border-red-900/30" : "bg-emerald-950/40 text-emerald-350 border border-emerald-900/30"}`}>
-                              {a.status}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
+                      {attendanceList.map((a) => {
+                        let hoursWorkedStr = "—";
+                        if (a.checkIn && a.checkOut) {
+                          try {
+                            const [inH, inM] = a.checkIn.split(":").map(Number);
+                            const [outH, outM] = a.checkOut.split(":").map(Number);
+                            let diff = (outH * 60 + outM) - (inH * 60 + inM);
+                            if (diff < 0) diff += 24 * 60;
+                            hoursWorkedStr = `${(diff / 60).toFixed(1)} jam`;
+                          } catch (e) {}
+                        }
+                        const shiftName = a.shiftId === "s1" ? "Pagi" : a.shiftId === "s2" ? "Siang" : a.shiftId === "s3" ? "Malam" : a.shiftId || "General";
+                        return (
+                          <tr key={a.id} className="border-b border-amber-500/5 hover:bg-amber-500/5 py-1">
+                            <td className="py-2 text-amber-200/50 font-mono text-[10px]">{a.date}</td>
+                            <td className="py-2 font-bold text-amber-100 print-text-dark">{a.userName}</td>
+                            <td className="py-2 text-amber-250 text-[10px] uppercase font-semibold">{a.role}</td>
+                            <td className="py-2">{shiftName}</td>
+                            <td className="py-2 font-mono text-emerald-400">{a.checkIn}</td>
+                            <td className="py-2 font-mono text-amber-200">{a.checkOut || "Active Shift"}</td>
+                            <td className="py-2 text-right font-mono text-amber-100 print-text-dark">{hoursWorkedStr}</td>
+                            <td className="py-2 text-right">
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-sans font-bold ${a.status === "Terlambat" ? "bg-red-950/40 text-red-550 border border-red-900/30" : "bg-emerald-950/40 text-emerald-350 border border-emerald-900/30"}`}>
+                                {a.status}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

@@ -53,7 +53,7 @@ export default function Dashboard({
   const foodCostPercent = totalNetSales > 0 ? (totalFoodCost / totalNetSales) * 100 : 0;
 
   // Dynamic Labor charge: 15% estimated standard + simulated attendance payouts
-  const totalLaborCost = (state.attendance || []).reduce((sum, l) => {
+  const totalLaborCost = (state.shiftAttendanceLogs || []).reduce((sum, l) => {
     let hrs = 8; // default standard shift
     if (l.checkIn && l.checkOut) {
       const inTime = new Date(`${l.date}T${l.checkIn}`);

@@ -48,14 +48,14 @@ export default function Sidebar({
     }
 
     if (role === "Waiter" || role === "Head Waiter" || role === "Front of House") {
-      return !["foh", "absensi", "sop_mgmt", "shift_mgmt", "smallwares_mgmt"].includes(tabId);
+      return !["foh", "sop_mgmt", "shift_mgmt", "smallwares_mgmt"].includes(tabId);
     }
     if (tabId === "foh") {
       return !["Owner", "Manager", "Supervisor", "Head Waiter", "Waiter", "Front of House"].includes(role);
     }
 
     if (role === "Service Staff") {
-      return !["service_dept", "absensi", "sop_mgmt", "shift_mgmt", "smallwares_mgmt"].includes(tabId);
+      return !["service_dept", "sop_mgmt", "shift_mgmt", "smallwares_mgmt"].includes(tabId);
     }
     if (tabId === "service_dept") return true;
     
@@ -66,7 +66,7 @@ export default function Sidebar({
       return ["users", "branding", "report", "cogs", "procurement", "analytics"].includes(tabId);
     }
     if (role === "Cashier") {
-      const allowedCashierTabs = ["dashboard", "cashier_pos", "sop_mgmt", "kpi", "dailysop", "absensi", "midtrans_setup", "qris_tester"];
+      const allowedCashierTabs = ["dashboard", "cashier_pos", "sop_mgmt", "kpi", "dailysop", "midtrans_setup", "qris_tester"];
       return !allowedCashierTabs.includes(tabId);
     }
     if (role === "Kitchen") {
@@ -85,7 +85,6 @@ export default function Sidebar({
     { id: "service_dept", label: "Service Department", icon: "🛠️", section: "Utama" },
     { id: "inventory", label: "Inventory Harian", icon: "📦", section: "Utama" },
     { id: "dailysop", label: "Daily SOP & Ops", icon: "✅", section: "Utama" },
-    { id: "absensi", label: "Absensi Staff", icon: "📋", section: "Utama" },
     { id: "kpi", label: "KPI & Performa", icon: "🏆", section: "Utama" },
     { id: "fifo", label: "FIFO Tracker", icon: "🔄", section: "Utama" },
 

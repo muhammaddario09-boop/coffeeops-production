@@ -35,7 +35,6 @@ export default function BrandingSettings({ state, onUpdateBranding, onImportBack
     { id: "service_dept", label: "Service Department", icon: "🛠️", section: "Utama" },
     { id: "inventory", label: "Inventory Harian", icon: "📦", section: "Utama" },
     { id: "dailysop", label: "Daily SOP & Ops", icon: "✅", section: "Utama" },
-    { id: "absensi", label: "Absensi Staff", icon: "📋", section: "Utama" },
     { id: "kpi", label: "KPI & Performa", icon: "🏆", section: "Utama" },
     { id: "fifo", label: "FIFO Tracker", icon: "🔄", section: "Utama" },
     { id: "storage", label: `${branding.storageGudangName || "Gudang Utama"} & ${branding.storageBarName || "Bar Chiller"}`, icon: "🏪", section: "Storage" },

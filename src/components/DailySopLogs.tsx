@@ -861,7 +861,7 @@ Tercatat **${todayIncs.length} kejadian luar biasa** di toko:
 
     if (qLower.includes("belum") || qLower.includes("mengisi") || qLower.includes("sop") || qLower.includes("isi") || qLower.includes("jurnal")) {
       // Find staff logged in attending checkins today but having no checklist entries
-      const checkedInStaff = (state.attendance || [])
+      const checkedInStaff = (state.shiftAttendanceLogs || [])
         .filter(a => a.date === todayStr)
         .map(a => a.userName);
       
@@ -938,7 +938,7 @@ Maaf, saya tidak memahami pertanyaan spesifik Anda secara lokal. Coba klik tombo
             temps: temps.slice(0, 5),
             incidents: incidents.slice(0, 5),
             handovers: handovers.slice(0, 5),
-            attendanceStaff: state.attendance || []
+            attendanceStaff: state.shiftAttendanceLogs || []
           })})`
         })
       });

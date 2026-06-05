@@ -514,8 +514,8 @@ export default function SystemManagement({
       downloadCsvFile(csvContent, `${prefix}_export_kpi_performa_${dateStr}.csv`);
     } else if (moduleName === "attendance") {
       csvContent = "Log ID,Nama Staff,Tanggal,Waktu Masuk,Waktu Pulang,Status,Shift\n";
-      (state.attendance || []).forEach(att => {
-        csvContent += `"${att.id}","${att.userName}","${att.date}","${att.checkIn}","${att.checkOut || "-"}","${att.status}","${att.shift || "-"}"\n`;
+      (state.shiftAttendanceLogs || []).forEach(att => {
+        csvContent += `"${att.id}","${att.userName}","${att.date}","${att.checkIn}","${att.checkOut || "-"}","${att.status}","${att.shiftId || "-"}"\n`;
       });
       downloadCsvFile(csvContent, `${prefix}_export_attendance_${dateStr}.csv`);
     } else if (moduleName === "equipment") {

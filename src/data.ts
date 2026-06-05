@@ -214,31 +214,6 @@ export const initialStats: CoffeeOpsState = {
     { id: "u4", name: "Adit Barista", role: "Barista", pin: "0000", staffCode: "BAR001", email: "adit@gmail.com", whatsappNumber: "628222333444", isActive: true, branchId: "Pusat Pangkalpinang (HQ)" },
     { id: "u5", name: "Chaca Cashier", role: "Cashier", pin: "5555", staffCode: "CSH001", email: "chaca@gmail.com", whatsappNumber: "628333444555", isActive: true, branchId: "Pusat Pangkalpinang (HQ)" }
   ],
-  attendance: [
-    {
-      id: "att-1",
-      userId: "u3",
-      userName: "Adit Barista",
-      role: "Barista",
-      date: "2026-06-01",
-      checkIn: "05:45",
-      checkOut: "14:15",
-      shift: "Pagi (06:00–14:00)",
-      status: "Hadir",
-      hoursWorked: 8.5
-    },
-    {
-      id: "att-2",
-      userId: "u2",
-      userName: "Mega Manager",
-      role: "Manager",
-      date: "2026-06-01",
-      checkIn: "07:50",
-      checkOut: undefined,
-      shift: "Pagi (06:00–14:00)",
-      status: "Hadir"
-    }
-  ],
   recipes: [
     {
       id: "R-001",

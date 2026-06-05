@@ -30,7 +30,6 @@ import MasterBahan from "./components/MasterBahan";
 import BrandingSettings from "./components/BrandingSettings";
 import SupabaseEnterpriseSchema from "./components/SupabaseEnterpriseSchema";
 import AssistantChat from "./components/AssistantChat";
-import AbsensiStaff from "./components/AbsensiStaff";
 import DailySopLogs from "./components/DailySopLogs";
 import UserManagement from "./components/UserManagement";
 import ShiftManagement from "./components/ShiftManagement";
@@ -209,116 +208,6 @@ export default function App() {
     }
 
     syncStateWithServer(nextState);
-  };
-
-  const handleClockIn = (userId: string, shift: string, facePhoto?: string) => {
-    const nextState = { ...state };
-    const userForClock = (nextState.users || []).find((u) => u.id === userId);
-    if (!userForClock) return;
-
-    const timeStr = new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
-    const dateStr = new Date().toISOString().split("T")[0];
-
-    const alreadyClockedIn = (nextState.attendance || []).some(
-      (a) => a.userId === userId && a.date === dateStr
-    );
-    if (alreadyClockedIn) {
-      triggerToast("Gagal: Anda sudah melakukan absen masuk hari ini!");
-      return;
-    }
-
-    let status: "Hadir" | "Terlambat" = "Hadir";
-    const [hours, minutes] = timeStr.split(":").map(Number);
-    
-    // Configurable parameters from branding settings
-    const lateThreshold = state.branding.lateThresholdMinutes ?? 15;
-    let shiftHourStart = 6;
-    let shiftMinuteStart = 0;
-
-    if (shift.includes("Pagi")) {
-      const startStr = state.branding.shiftPagiStart || "06:00";
-      const [h, m] = startStr.split(":").map(Number);
-      if (!isNaN(h)) { shiftHourStart = h; shiftMinuteStart = m || 0; }
-    } else if (shift.includes("Siang")) {
-      const startStr = state.branding.shiftSiangStart || "13:00";
-      const [h, m] = startStr.split(":").map(Number);
-      if (!isNaN(h)) { shiftHourStart = h; shiftMinuteStart = m || 0; }
-    } else if (shift.includes("Malam")) {
-      const startStr = state.branding.shiftMalamStart || "20:00";
-      const [h, m] = startStr.split(":").map(Number);
-      if (!isNaN(h)) { shiftHourStart = h; shiftMinuteStart = m || 0; }
-    }
-
-    const currentAbsoluteMinutes = hours * 60 + minutes;
-    const shiftAbsoluteMinutes = shiftHourStart * 60 + shiftMinuteStart;
-
-    if (currentAbsoluteMinutes > shiftAbsoluteMinutes + lateThreshold) {
-      status = "Terlambat";
-    }
-
-    const newLog: AttendanceLog = {
-      id: "att-" + Date.now().toString(),
-      userId,
-      userName: userForClock.name,
-      role: userForClock.role,
-      date: dateStr,
-      checkIn: timeStr,
-      shift,
-      status,
-      facePhoto
-    };
-
-    nextState.attendance = nextState.attendance || [];
-    nextState.attendance.push(newLog);
-    nextState.activities = addActivity("📋", `Staff ${userForClock.name} melakukan Absen Masuk (${shift}) - Status: ${status}`, "info");
-    logActivityGlobal(nextState, "CLOCK_IN", `Staff ${userForClock.name} melakukan Absen Masuk (${shift}) - Status: ${status}`, userForClock.name);
-
-    syncStateWithServer(nextState);
-    triggerToast(`✓ Absen Masuk Berhasil! Selamat bertugas, ${userForClock.name}.`);
-  };
-
-  const handleClockOut = (attendanceId: string) => {
-    const nextState = { ...state };
-    if (!nextState.attendance) return;
-    const logIdx = nextState.attendance.findIndex((a) => a.id === attendanceId);
-    if (logIdx === -1) return;
-
-    const log = nextState.attendance[logIdx];
-    const timeStr = new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
-
-    let hoursWorked = 8.0;
-    try {
-      const [inH, inM] = log.checkIn.split(":").map(Number);
-      const [outH, outM] = timeStr.split(":").map(Number);
-      let diffMins = (outH * 60 + outM) - (inH * 60 + inM);
-      if (diffMins < 0) diffMins += 24 * 60;
-      hoursWorked = parseFloat((diffMins / 60).toFixed(1));
-    } catch (e) {
-      console.error(e);
-    }
-
-    nextState.attendance[logIdx] = {
-      ...log,
-      checkOut: timeStr,
-      hoursWorked
-    };
-
-    nextState.activities = addActivity("🚪", `Staff ${log.userName} melakukan Absen Keluar (Selesai Shift), Total kerja: ${hoursWorked} jam`, "info");
-    logActivityGlobal(nextState, "CLOCK_OUT", `Staff ${log.userName} melakukan Absen Keluar (Selesai Shift), Total kerja: ${hoursWorked} jam`, log.userName);
-
-    syncStateWithServer(nextState);
-    triggerToast(`✓ Absen Keluar Berhasil! Terima kasih atas kerjamu hari ini, ${log.userName}.`);
-  };
-
-  const handleDeleteAttendance = (attendanceId: string) => {
-    const nextState = { ...state };
-    if (!nextState.attendance) return;
-    const log = nextState.attendance.find((a) => a.id === attendanceId);
-    nextState.attendance = nextState.attendance.filter((a) => a.id !== attendanceId);
-    nextState.activities = addActivity("⚙️", `Menghapus log kearsipan absensi untuk ${log?.userName || "Barista"}`, "info");
-
-    syncStateWithServer(nextState);
-    triggerToast("Catatan absensi dihapus.");
   };
 
   const handleAddUser = async (newUser: Omit<User, "id">) => {
@@ -2058,16 +1947,6 @@ export default function App() {
                 syncStateWithServer(backupPayload);
                 triggerToast("✓ Data backup database berhasil dipulihkan secara penuh.");
               }}
-            />
-          )}
-          {activeTab === "absensi" && (
-            <AbsensiStaff
-              state={state}
-              currentUser={currentUser}
-              onClockIn={handleClockIn}
-              onClockOut={handleClockOut}
-              onDeleteAttendanceCode={handleDeleteAttendance}
-              onUpdateState={(nextState) => syncStateWithServer(nextState)}
             />
           )}
           {activeTab === "shift_mgmt" && (

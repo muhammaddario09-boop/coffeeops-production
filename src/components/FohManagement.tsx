@@ -498,7 +498,7 @@ export default function FohManagement({
 
   // Integrated FOH Attendance state and callbacks
   const todayStr = new Date().toISOString().split("T")[0];
-  const todayAttendance = (state.attendance || []).find(
+  const todayAttendance = (state.shiftAttendanceLogs || []).find(
     (a) => a.userId === (currentUser?.id || "u-waiter") && a.date === todayStr
   );
 
@@ -570,8 +570,9 @@ export default function FohManagement({
 
   const handleClockIn = () => {
     const nextState = { ...state };
-    const formatTime = new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
-    const isLate = new Date().getHours() >= 9;
+    const now = new Date();
+    const formatTimeSeconds = now.toTimeString().split(" ")[0]; // "HH:MM:SS"
+    const isLate = now.getHours() >= 9;
 
     const newLog = {
       id: "att-" + Date.now(),
@@ -579,13 +580,15 @@ export default function FohManagement({
       userName: currentUser?.name || "Kru Waiter",
       role: currentUser?.role || "Waiter",
       date: todayStr,
-      checkIn: formatTime,
-      shift: checklistShift || "Pagi",
+      shiftId: checklistShift === "Sore" ? "s-siang" : "s-pagi",
+      checkIn: formatTimeSeconds,
       status: (isLate ? "Terlambat" : "Hadir") as "Hadir" | "Terlambat",
+      latenessMinutes: isLate ? (now.getHours() - 9) * 60 + now.getMinutes() : 0,
+      overtimeMinutes: 0,
       facePhoto: attendancePhoto || "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&auto=format&fit=crop&q=60"
     };
 
-    nextState.attendance = [newLog, ...(nextState.attendance || [])];
+    nextState.shiftAttendanceLogs = [newLog, ...(nextState.shiftAttendanceLogs || [])];
 
     if (!nextState.auditLogs) nextState.auditLogs = [];
     nextState.auditLogs.unshift({
@@ -594,7 +597,7 @@ export default function FohManagement({
       user: currentUser?.name || "Kru Waiter",
       role: currentUser?.role || "Waiter",
       page: "FOH Dashboard",
-      action: `Clock-In Presensi FOH pada ${formatTime}`,
+      action: `Clock-In Presensi FOH pada ${formatTimeSeconds}`,
       device: navigator.userAgent.substring(0, 40),
       ip: "192.168.1.10"
     });
@@ -607,14 +610,15 @@ export default function FohManagement({
   const handleClockOut = () => {
     if (!todayAttendance) return;
     const nextState = { ...state };
-    const formatTime = new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+    const now = new Date();
+    const formatTimeSeconds = now.toTimeString().split(" ")[0]; // "HH:MM:SS"
 
-    nextState.attendance = (nextState.attendance || []).map((a) => {
+    nextState.shiftAttendanceLogs = (nextState.shiftAttendanceLogs || []).map((a) => {
       if (a.id === todayAttendance.id) {
         return {
           ...a,
-          checkOut: formatTime,
-          hoursWorked: 8
+          checkOut: formatTimeSeconds,
+          overtimeMinutes: 0
         };
       }
       return a;
@@ -627,7 +631,7 @@ export default function FohManagement({
       user: currentUser?.name || "Kru Waiter",
       role: currentUser?.role || "Waiter",
       page: "FOH Dashboard",
-      action: `Clock-Out Presensi FOH pada ${formatTime}`,
+      action: `Clock-Out Presensi FOH pada ${formatTimeSeconds}`,
       device: navigator.userAgent.substring(0, 40),
       ip: "192.168.1.10"
     });
