@@ -193,6 +193,25 @@ function mergeLoadedState(loaded: Partial<CoffeeOpsState>): CoffeeOpsState {
   return merged;
 }
 
+function safeUuidFromId(id: string | undefined | null): string {
+  if (!id) {
+    const randomHex = () => Math.floor((1 + Math.random()) * 0x10000).toString(16).substring(1);
+    return `${randomHex()}${randomHex()}-${randomHex()}-${randomHex()}-${randomHex()}-${randomHex()}${randomHex()}${randomHex()}`;
+  }
+  const cleanId = String(id).trim();
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanId)) {
+    return cleanId.toLowerCase();
+  }
+  const hashStr = cleanId.toLowerCase().replace(/[^0-9a-f]/g, "");
+  const padded = hashStr.padEnd(32, "a");
+  const part1 = padded.substring(0, 8);
+  const part2 = padded.substring(8, 12);
+  const part3 = padded.substring(12, 16);
+  const part4 = padded.substring(16, 20);
+  const part5 = padded.substring(20, 32);
+  return `${part1}-${part2}-${part3}-${part4}-${part5}`;
+}
+
 function mapDbEmployeeToUser(emp: any): User {
   return {
     id: emp.id || emp.employee_id || `u-${emp.staff_code || emp.employee_code}`,
@@ -593,6 +612,7 @@ ERROR: ${invItemsErr ? JSON.stringify(invItemsErr.message || invItemsErr) : "NON
         
         const dbPayloads = list.map((m: any) => {
           const dbRow: any = {};
+          if (dbCols.includes("id")) dbRow.id = safeUuidFromId(m.id || String(m.item_id || m.itemCode || "BK-001") + String(m.created_at || m.createdAt));
           if (dbCols.includes("item_code")) dbRow.item_code = m.item_id || m.itemCode || "BK-001";
           if (dbCols.includes("itemCode")) dbRow.itemCode = m.item_id || m.itemCode || "BK-001";
           if (dbCols.includes("qty")) dbRow.qty = m.quantity || m.qty || 0;
@@ -633,7 +653,7 @@ ERROR: ${movementsErr ? JSON.stringify(movementsErr.message || movementsErr) : "
         
         const dbPayloads = list.map((a: any) => {
           const dbRow: any = {};
-          if (dbCols.includes("id")) dbRow.id = a.id;
+          if (dbCols.includes("id")) dbRow.id = safeUuidFromId(a.id);
           if (dbCols.includes("user_id")) dbRow.user_id = a.userId;
           if (dbCols.includes("user_name")) dbRow.user_name = a.userName;
           if (dbCols.includes("role")) dbRow.role = a.role;
@@ -681,12 +701,16 @@ ERROR: ${attendanceErr ? JSON.stringify(attendanceErr.message || attendanceErr) 
         const dbCols = (testRowQuery.data && testRowQuery.data.length > 0) ? Object.keys(testRowQuery.data[0]) : ["order_code", "total_amount"];
         const dbPayloads = sales.map((s: any) => {
           const dbRow: any = {};
-          if (dbCols.includes("id")) dbRow.id = s.id;
+          if (dbCols.includes("id")) dbRow.id = safeUuidFromId(s.id);
           if (dbCols.includes("order_code")) dbRow.order_code = s.recipeId || s.id;
           if (dbCols.includes("total_amount")) dbRow.total_amount = s.totalRevenue || 0;
           if (dbCols.includes("created_at")) dbRow.created_at = s.date || new Date().toISOString();
           if (dbCols.includes("payment_method")) dbRow.payment_method = s.payment_method || "CASH";
           if (dbCols.includes("status")) dbRow.status = "Settlement";
+          if (dbCols.includes("cashier_name") && s.by) dbRow.cashier_name = s.by;
+          if (dbCols.includes("recipe_name") && s.recipeName) dbRow.recipe_name = s.recipeName;
+          if (dbCols.includes("qty") && s.qty) dbRow.qty = s.qty;
+          if (dbCols.includes("total_cost") && s.totalCost !== undefined) dbRow.total_cost = s.totalCost;
           return dbRow;
         });
         const { error, data } = await (supabase as any).from("transactions").upsert(dbPayloads).select();
