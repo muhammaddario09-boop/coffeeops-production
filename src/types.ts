@@ -16,6 +16,8 @@ export interface BrandBranding {
   cafeLng?: number;
   gpsVerificationEnabled?: boolean;
   gpsVerificationRadius?: number;
+  supabaseUrl?: string;
+  supabaseAnonKey?: string;
 }
 
 export interface MasterItem {

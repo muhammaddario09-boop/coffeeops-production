@@ -53,6 +53,7 @@ export default function App() {
   const [state, setState] = useState<CoffeeOpsState>(initialStats);
   const [activeTab, setActiveTab] = useState("dashboard");
   const [isConnected, setIsConnected] = useState(true);
+  const [supabaseStatus, setSupabaseStatus] = useState<{ status: string; isInitialized: boolean; isReachable: boolean; details?: string } | null>(null);
   const [lastUpdate, setLastUpdate] = useState("");
   const [isAiOpen, setIsAiOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -478,6 +479,17 @@ export default function App() {
       } else {
         if (!silent) setIsConnected(false);
       }
+
+      // Check current back-end database connectivity (Supabase status)
+      try {
+        const statusResponse = await fetch(getServerUrl("/api/db-status"));
+        if (statusResponse.ok) {
+          const statusResult = await statusResponse.json();
+          setSupabaseStatus(statusResult);
+        }
+      } catch (statusErr) {
+        console.error("Failed to fetch Supabase status:", statusErr);
+      }
     } catch (err) {
       if (!silent) setIsConnected(false);
     } finally {
@@ -505,6 +517,15 @@ export default function App() {
       if (response.ok) {
         setIsConnected(true);
         setLastUpdate(getTodayDate());
+
+        // Refresh dynamic connection database status diagnostic
+        try {
+          const statusResponse = await fetch(getServerUrl("/api/db-status"));
+          if (statusResponse.ok) {
+            const statusResult = await statusResponse.json();
+            setSupabaseStatus(statusResult);
+          }
+        } catch (statusErr) {}
       } else {
         setIsConnected(false);
       }
@@ -1665,6 +1686,26 @@ export default function App() {
           onLogout={handleLogout}
           onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
         />
+
+        {supabaseStatus?.status === "offline" && (
+          <div className="bg-gradient-to-r from-amber-950/90 via-amber-900/90 to-amber-950/90 border-y border-amber-500/20 px-6 py-2.5 flex flex-col sm:flex-row gap-3 items-center justify-between text-amber-50 shadow-md animate-fadeIn">
+            <div className="flex items-center gap-3">
+              <span className="text-lg">🌩️</span>
+              <div>
+                <h4 className="font-mono text-xs font-bold text-amber-400 uppercase tracking-wide">Cloud Database Disconnected (Mode Offline Aktif)</h4>
+                <p className="text-[10px] text-amber-100/60 font-sans mt-0.5">
+                  Server tidak terhubung ke Supabase ({supabaseStatus?.details || "Kredensial salah atau kosong"}). Server menggunakan penyimpanan fallback lokal: <strong className="text-amber-200">database.json</strong>.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setActiveTab("branding")}
+              className="text-[10px] font-mono font-bold bg-[#FAF0E6]/10 hover:bg-[#FAF0E6]/25 border border-[#FAF0E6]/15 hover:border-[#D4A853] text-amber-100 px-3 py-1 rounded transition whitespace-nowrap cursor-pointer"
+            >
+              ⚙️ Konfigurasi Supabase
+            </button>
+          </div>
+        )}
 
         {state.disasterRecoveryActive && (
           <div className="bg-gradient-to-r from-red-950 via-red-900 to-red-950 border-y border-red-500/30 px-6 py-3 flex items-center justify-between text-amber-50 shadow-xl animate-pulse">

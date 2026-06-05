@@ -25,6 +25,8 @@ export default function BrandingSettings({ state, onUpdateBranding, onImportBack
   const [lateThresholdMinutes, setLateThresholdMinutes] = useState(branding.lateThresholdMinutes || 15);
   const [gpsVerificationEnabled, setGpsVerificationEnabled] = useState(branding.gpsVerificationEnabled !== false);
   const [gpsVerificationRadius, setGpsVerificationRadius] = useState(branding.gpsVerificationRadius || 100);
+  const [supabaseUrl, setSupabaseUrl] = useState(branding.supabaseUrl || "");
+  const [supabaseAnonKey, setSupabaseAnonKey] = useState(branding.supabaseAnonKey || "");
 
   const defaultNavItems: NavigationItemSetting[] = [
     { id: "dashboard", label: "Dashboard", icon: "📊", section: "Utama" },
@@ -87,6 +89,8 @@ export default function BrandingSettings({ state, onUpdateBranding, onImportBack
       gpsVerificationRadius: Number(gpsVerificationRadius),
       cafeLat: branding.cafeLat,
       cafeLng: branding.cafeLng,
+      supabaseUrl,
+      supabaseAnonKey,
     }, navigationSettings);
   };
 
@@ -362,6 +366,41 @@ export default function BrandingSettings({ state, onUpdateBranding, onImportBack
                     />
                   </div>
                 </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Supabase Dynamic Self-Healing Connection Configuration Row */}
+          <div className="border-t border-amber-500/10 pt-4 space-y-4">
+            <h4 className="font-serif font-bold text-sm text-[#D4A853] flex items-center gap-1.5">
+              🌩️ Integrasi Cloud Database (Supabase)
+            </h4>
+            <p className="text-[10px] text-amber-100/40 leading-normal">
+              Masukkan kredensial akun Supabase Anda secara manual di sini untuk menghubungkan ulang database jika Anda baru saja memindahkan atau memperbarui ke domain yang berbayar (Paid Domain). Jika dikosongkan, sistem akan otomatis menggunakan variabel environment server default.
+            </p>
+            <div className="space-y-3 font-mono">
+              <div className="flex flex-col gap-1">
+                <span className="text-[9px] text-amber-100/40 font-semibold uppercase">SUPABASE PROJECT URL</span>
+                <input
+                  type="text"
+                  value={supabaseUrl}
+                  onChange={(e) => setSupabaseUrl(e.target.value)}
+                  className="bg-[#FAF0E6]/5 border border-amber-500/10 focus:border-[#D4A853]/40 rounded-xl px-3 py-2 text-xs text-amber-100 placeholder-amber-200/10 outline-none w-full"
+                  placeholder="https://your-project-id.supabase.co"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <span className="text-[9px] text-amber-100/40 font-semibold uppercase">SUPABASE ANON KEY / CLIENT API KEY</span>
+                <input
+                  type="password"
+                  value={supabaseAnonKey}
+                  onChange={(e) => setSupabaseAnonKey(e.target.value)}
+                  className="bg-[#FAF0E6]/5 border border-amber-500/10 focus:border-[#D4A853]/40 rounded-xl px-3 py-2 text-xs text-amber-100 placeholder-amber-200/10 outline-none w-full"
+                  placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6In..."
+                />
+                <span className="text-[9px] text-amber-200/30 mt-0.5">
+                  ✓ Kunci Anon aman disimpan secara terenkripsi statis di server database.json.
+                </span>
               </div>
             </div>
           </div>

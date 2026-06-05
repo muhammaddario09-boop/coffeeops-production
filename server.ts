@@ -42,17 +42,24 @@ const DB_FILE = path.join(process.cwd(), "database.json");
 app.use(express.json({ limit: "20mb" }));
 
 // Initialize Supabase Client if credentials exist
-const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "";
-const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
+let supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "";
+let supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
 let supabase: ReturnType<typeof createClient> | null = null;
 
-if (supabaseUrl && supabaseAnonKey) {
+function tryInitSupabase(url: string, key: string): boolean {
+  if (!url || !key) return false;
   try {
-    supabase = createClient(supabaseUrl, supabaseAnonKey);
-    console.log("[Supabase] Production client initialized successfully.");
+    supabase = createClient(url, key);
+    console.log("[Supabase] Client initialized successfully.");
+    return true;
   } catch (err) {
     console.error("[Supabase] Failed to initialize client:", err);
+    return false;
   }
+}
+
+if (supabaseUrl && supabaseAnonKey) {
+  tryInitSupabase(supabaseUrl, supabaseAnonKey);
 }
 
 // In-Memory state cache
@@ -815,6 +822,25 @@ function loadStateFromLocalFile(): CoffeeOpsState {
 // Middleware bridge to preload cache before route handler begins
 async function ensureStateLoaded(forceRefresh = false) {
   const now = Date.now();
+
+  // Self-heal: Try to initialize supabase from stored branding configs inside local database file
+  if (!supabase) {
+    try {
+      if (fs.existsSync(DB_FILE)) {
+        const data = fs.readFileSync(DB_FILE, "utf-8");
+        const loaded = JSON.parse(data) as CoffeeOpsState;
+        if (loaded && loaded.branding && loaded.branding.supabaseUrl && loaded.branding.supabaseAnonKey) {
+          const ok = tryInitSupabase(loaded.branding.supabaseUrl, loaded.branding.supabaseAnonKey);
+          if (ok) {
+            console.log("[Supabase Self-Healing Engine] Successfully recovered connection from stored branding.");
+          }
+        }
+      }
+    } catch (err) {
+      // ignore
+    }
+  }
+
   if (!supabase) {
     // Local-only mode
     if (forceRefresh || lastSupabaseFetchTime === 0) {
@@ -857,6 +883,15 @@ async function saveState(state: CoffeeOpsState) {
     // ephemeral FS compatibility
   }
 
+  // Self-heal: If keys were updated on the client-side, dynamically update the client instance
+  if (state.branding && state.branding.supabaseUrl && state.branding.supabaseAnonKey) {
+    if (!supabase || supabaseUrl !== state.branding.supabaseUrl || supabaseAnonKey !== state.branding.supabaseAnonKey) {
+      supabaseUrl = state.branding.supabaseUrl;
+      supabaseAnonKey = state.branding.supabaseAnonKey;
+      tryInitSupabase(supabaseUrl, supabaseAnonKey);
+    }
+  }
+
   if (supabase) {
     await saveStateToSupabase(state);
   }
@@ -886,6 +921,36 @@ app.use(async (req, res, next) => {
 app.get("/api/state", (req, res) => {
   const state = loadState();
   res.json(state);
+});
+
+app.get("/api/db-status", async (req, res) => {
+  const isInitialized = !!supabase;
+  let isReachable = false;
+  let details = "";
+  
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.from("employees").select("id").limit(1);
+      if (!error) {
+        isReachable = true;
+      } else {
+        details = `Query error: ${error.message}`;
+      }
+    } catch (e: any) {
+      details = `Exception: ${e?.message || e}`;
+    }
+  } else {
+    details = "No credentials provided. Waiting for configuration in Kustomisasi Brand setting.";
+  }
+
+  res.json({
+    status: isInitialized && isReachable ? "online" : "offline",
+    isInitialized,
+    isReachable,
+    supabaseUrl: supabaseUrl ? supabaseUrl.replace(/^(https?:\/\/)[^.]+(\..+)/, "$1***$2") : null,
+    provider: isInitialized ? "Supabase Cloud DB" : "Local database.json Fallback Mode",
+    details
+  });
 });
 
 app.post("/api/state", async (req, res) => {
