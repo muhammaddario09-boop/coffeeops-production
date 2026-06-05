@@ -431,9 +431,21 @@ async function loadStateFromSupabase(): Promise<CoffeeOpsState | null> {
 
       // 3. Relational Attendance Logs
       try {
-        const { data: dbAttendance, error: attError } = await (supabase as any)
-          .from("attendance_logs")
-          .select("*");
+        let dbAttendance = null;
+        let attError = null;
+
+        const resNew = await (supabase as any).from("attendance").select("*");
+        if (!resNew.error && resNew.data) {
+          dbAttendance = resNew.data;
+        } else {
+          const resOld = await (supabase as any).from("attendance_logs").select("*");
+          if (!resOld.error && resOld.data) {
+            dbAttendance = resOld.data;
+          } else {
+            attError = resNew.error || resOld.error;
+          }
+        }
+
         if (!attError && dbAttendance && dbAttendance.length > 0) {
           loadedState.shiftAttendanceLogs = dbAttendance.map((row: any) => {
             const dateVal = row.check_in ? row.check_in.split("T")[0] : new Date().toISOString().split("T")[0];
@@ -446,7 +458,7 @@ async function loadStateFromSupabase(): Promise<CoffeeOpsState | null> {
 
             return {
               id: row.id,
-              userId: row.user_id || row.userId || "u-staff",
+              userId: row.employee_id || row.user_id || row.userId || "u-staff",
               userName: row.user_name || "Staff",
               role: row.role || "Barista",
               date: dateVal,
@@ -468,14 +480,26 @@ async function loadStateFromSupabase(): Promise<CoffeeOpsState | null> {
           });
         }
       } catch (err: any) {
-        console.warn("[Supabase] Optional query for attendance_logs failed:", err.message);
+        console.warn("[Supabase] Optional query for attendance/attendance_logs failed:", err.message);
       }
 
       // 4. Relational POS Transactions / Sales
       try {
-        const { data: dbSales, error: salesError } = await (supabase as any)
-          .from("transactions")
-          .select("*");
+        let dbSales = null;
+        let salesError = null;
+
+        const resNew = await (supabase as any).from("sales").select("*");
+        if (!resNew.error && resNew.data) {
+          dbSales = resNew.data;
+        } else {
+          const resOld = await (supabase as any).from("transactions").select("*");
+          if (!resOld.error && resOld.data) {
+            dbSales = resOld.data;
+          } else {
+            salesError = resNew.error || resOld.error;
+          }
+        }
+
         if (!salesError && dbSales && dbSales.length > 0) {
           loadedState.sales = dbSales.map((row: any) => ({
             id: row.id,
@@ -486,11 +510,11 @@ async function loadStateFromSupabase(): Promise<CoffeeOpsState | null> {
             totalRevenue: row.total_amount || 0,
             totalCost: row.total_cost || 0,
             date: row.created_at || row.date || new Date().toISOString(),
-            by: row.cashier_id || "Cashier"
+            by: row.cashier_id || row.by || "Cashier"
           }));
         }
       } catch (err: any) {
-        console.warn("[Supabase] Optional query for transactions failed:", err.message);
+        console.warn("[Supabase] Optional query for sales/transactions failed:", err.message);
       }
 
       // 5. Relational Suppliers
@@ -645,15 +669,24 @@ ERROR: ${movementsErr ? JSON.stringify(movementsErr.message || movementsErr) : "
     // Save Attendance Logs
     let attendanceResult: any = "SUCCESS";
     let attendanceErr: any = null;
+    let targetAttendanceTable = "attendance";
     try {
       const list = state.shiftAttendanceLogs || [];
       if (list.length > 0) {
-        const testRowQuery = await (supabase as any).from("attendance_logs").select("*").limit(1);
-        const dbCols = (testRowQuery.data && testRowQuery.data.length > 0) ? Object.keys(testRowQuery.data[0]) : ["user_id", "check_in", "status"];
+        let testRowQuery = await (supabase as any).from("attendance").select("*").limit(1);
+        if (testRowQuery.error) {
+          const testFallback = await (supabase as any).from("attendance_logs").select("*").limit(1);
+          if (!testFallback.error) {
+            targetAttendanceTable = "attendance_logs";
+            testRowQuery = testFallback;
+          }
+        }
+        const dbCols = (testRowQuery.data && testRowQuery.data.length > 0) ? Object.keys(testRowQuery.data[0]) : ["id", "employee_id", "user_name", "role", "check_in", "status"];
         
         const dbPayloads = list.map((a: any) => {
           const dbRow: any = {};
           if (dbCols.includes("id")) dbRow.id = safeUuidFromId(a.id);
+          if (dbCols.includes("employee_id")) dbRow.employee_id = a.userId || a.employeeId || "u-staff";
           if (dbCols.includes("user_id")) dbRow.user_id = a.userId;
           if (dbCols.includes("user_name")) dbRow.user_name = a.userName;
           if (dbCols.includes("role")) dbRow.role = a.role;
@@ -673,61 +706,74 @@ ERROR: ${movementsErr ? JSON.stringify(movementsErr.message || movementsErr) : "
           if (dbCols.includes("distance_radius_meters")) dbRow.distance_radius_meters = a.distanceRadiusMeters || null;
           return dbRow;
         });
-        const { error, data } = await (supabase as any).from("attendance_logs").upsert(dbPayloads).select();
+        const { error, data } = await (supabase as any).from(targetAttendanceTable).upsert(dbPayloads).select();
         if (error) {
           attendanceErr = error;
-          console.error("[Supabase] Fail attendance_logs upsert:", error);
+          console.error(`[Supabase] Fail ${targetAttendanceTable} upsert:`, error);
         } else {
           attendanceResult = data || `UPSERTED ${dbPayloads.length} TIMECARDS`;
         }
       }
     } catch (e: any) {
       attendanceErr = e;
-      console.warn("[Supabase] Attendance upsert skipped:", e.message);
+      console.warn(`[Supabase] Attendance upsert to ${targetAttendanceTable} skipped:`, e.message);
     }
     console.log(`\n[ATTENDANCE]
 ACTION: UPSERT_ATTENDANCE_CARDS
-DATABASE TABLE: attendance_logs
+DATABASE TABLE: ${targetAttendanceTable}
 QUERY RESULT: ${JSON.stringify(attendanceResult)}
 ERROR: ${attendanceErr ? JSON.stringify(attendanceErr.message || attendanceErr) : "NONE"}\n`);
-
+ 
     // Save POS Sales Transactions
     let salesResult: any = "SUCCESS";
     let salesErr: any = null;
+    let targetSalesTable = "sales";
     try {
       const sales = state.sales || [];
       if (sales.length > 0) {
-        const testRowQuery = await (supabase as any).from("transactions").select("*").limit(1);
-        const dbCols = (testRowQuery.data && testRowQuery.data.length > 0) ? Object.keys(testRowQuery.data[0]) : ["order_code", "total_amount"];
+        let testRowQuery = await (supabase as any).from("sales").select("*").limit(1);
+        if (testRowQuery.error) {
+          const testFallback = await (supabase as any).from("transactions").select("*").limit(1);
+          if (!testFallback.error) {
+            targetSalesTable = "transactions";
+            testRowQuery = testFallback;
+          }
+        }
+        const dbCols = (testRowQuery.data && testRowQuery.data.length > 0) ? Object.keys(testRowQuery.data[0]) : ["id", "order_code", "total_amount", "created_at", "status"];
         const dbPayloads = sales.map((s: any) => {
           const dbRow: any = {};
           if (dbCols.includes("id")) dbRow.id = safeUuidFromId(s.id);
           if (dbCols.includes("order_code")) dbRow.order_code = s.recipeId || s.id;
+          if (dbCols.includes("cashier_id")) dbRow.cashier_id = s.by || "Cashier";
           if (dbCols.includes("total_amount")) dbRow.total_amount = s.totalRevenue || 0;
-          if (dbCols.includes("created_at")) dbRow.created_at = s.date || new Date().toISOString();
+          if (dbCols.includes("discount_amount")) dbRow.discount_amount = 0;
+          if (dbCols.includes("net_amount")) dbRow.net_amount = s.totalRevenue || 0;
           if (dbCols.includes("payment_method")) dbRow.payment_method = s.payment_method || "CASH";
           if (dbCols.includes("status")) dbRow.status = "Settlement";
+          if (dbCols.includes("created_at")) dbRow.created_at = s.date || new Date().toISOString();
+          
+          // Fallback legacy columns in transactions
           if (dbCols.includes("cashier_name") && s.by) dbRow.cashier_name = s.by;
           if (dbCols.includes("recipe_name") && s.recipeName) dbRow.recipe_name = s.recipeName;
           if (dbCols.includes("qty") && s.qty) dbRow.qty = s.qty;
           if (dbCols.includes("total_cost") && s.totalCost !== undefined) dbRow.total_cost = s.totalCost;
           return dbRow;
         });
-        const { error, data } = await (supabase as any).from("transactions").upsert(dbPayloads).select();
+        const { error, data } = await (supabase as any).from(targetSalesTable).upsert(dbPayloads).select();
         if (error) {
           salesErr = error;
-          console.error("[Supabase] Fail transactions upsert:", error);
+          console.error(`[Supabase] Fail ${targetSalesTable} upsert:`, error);
         } else {
           salesResult = data || `UPSERTED ${dbPayloads.length} TRANSACTIONS`;
         }
       }
     } catch (e: any) {
       salesErr = e;
-      console.warn("[Supabase] POS sales upsert skipped:", e.message);
+      console.warn(`[Supabase] POS sales upsert to ${targetSalesTable} skipped:`, e.message);
     }
     console.log(`\n[POS_SALES]
 ACTION: UPSERT_SALES_DOCUMENTS
-DATABASE TABLE: transactions
+DATABASE TABLE: ${targetSalesTable}
 QUERY RESULT: ${JSON.stringify(salesResult)}
 ERROR: ${salesErr ? JSON.stringify(salesErr.message || salesErr) : "NONE"}\n`);
 
@@ -880,7 +926,8 @@ async function ensureStateLoaded(forceRefresh = false) {
   const now = Date.now();
 
   // Self-heal: Try to initialize supabase from stored branding configs inside local database file
-  if (!supabase) {
+  const hasEnvKeys = !!(process.env.VITE_SUPABASE_URL && process.env.VITE_SUPABASE_ANON_KEY);
+  if (!supabase && !hasEnvKeys) {
     try {
       if (fs.existsSync(DB_FILE)) {
         const data = fs.readFileSync(DB_FILE, "utf-8");
@@ -942,7 +989,9 @@ async function saveState(state: CoffeeOpsState) {
   }
 
   // Self-heal: If keys were updated on the client-side, dynamically update the client instance
-  if (state.branding && state.branding.supabaseUrl && state.branding.supabaseAnonKey) {
+  // ONLY if environment variables are not already forcing the connection.
+  const hasEnvKeys = !!(process.env.VITE_SUPABASE_URL && process.env.VITE_SUPABASE_ANON_KEY);
+  if (!hasEnvKeys && state.branding && state.branding.supabaseUrl && state.branding.supabaseAnonKey) {
     if (!supabase || supabaseUrl !== state.branding.supabaseUrl || supabaseAnonKey !== state.branding.supabaseAnonKey) {
       supabaseUrl = state.branding.supabaseUrl;
       supabaseAnonKey = state.branding.supabaseAnonKey;
